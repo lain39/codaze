@@ -14,7 +14,6 @@ Template files:
 These files are templates, not drop-in artifacts. You are expected to edit at least:
 
 - the `codaze` binary path
-- the working directory if needed
 - optional flags such as `--listen`, `--admin-listen`, or `--codex-version`
 - the `HOME` environment when your service manager does not provide a usable one
 - proxy environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` when you need upstream proxying
@@ -75,6 +74,25 @@ To restart after editing:
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/io.github.lain39.codaze.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.lain39.codaze.plist
 ```
+
+If you want to pass CLI flags to `codaze`, add them as separate entries under `ProgramArguments` instead of one joined string. For example:
+
+```xml
+<key>ProgramArguments</key>
+<array>
+  <string>/Users/you/.local/bin/codaze</string>
+  <string>--listen</string>
+  <string>127.0.0.1:18039</string>
+  <string>--admin-listen</string>
+  <string>127.0.0.1:18040</string>
+  <string>--accounts-dir</string>
+  <string>/Users/you/.codaze</string>
+  <string>--codex-version</string>
+  <string>0.118.0</string>
+</array>
+```
+
+`codaze` does not currently depend on its current working directory for runtime files, so `WorkingDirectory` is usually unnecessary.
 
 If you need upstream proxying, add the variables under `EnvironmentVariables`, for example:
 

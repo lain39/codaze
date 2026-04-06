@@ -14,7 +14,6 @@
 这些文件是模板，不是可以直接原样落地的产物。至少要按你的环境修改：
 
 - `codaze` 二进制路径
-- 工作目录
 - 是否追加 `--listen`、`--admin-listen`、`--codex-version` 等参数
 - 当服务管理器没有提供正确 `HOME` 时，手动设置 `HOME`
 - 如果需要上游代理，把 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 等环境变量一起写进去
@@ -75,6 +74,25 @@ launchctl print gui/$(id -u)/io.github.lain39.codaze
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/io.github.lain39.codaze.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.lain39.codaze.plist
 ```
+
+如果要给 `codaze` 传启动参数，不要写成一整个字符串；应当在 `ProgramArguments` 里一项一项追加。例如：
+
+```xml
+<key>ProgramArguments</key>
+<array>
+  <string>/Users/you/.local/bin/codaze</string>
+  <string>--listen</string>
+  <string>127.0.0.1:18039</string>
+  <string>--admin-listen</string>
+  <string>127.0.0.1:18040</string>
+  <string>--accounts-dir</string>
+  <string>/Users/you/.codaze</string>
+  <string>--codex-version</string>
+  <string>0.118.0</string>
+</array>
+```
+
+`codaze` 目前不依赖工作目录读取运行时文件，所以通常不需要设置 `WorkingDirectory`。
 
 如果你需要上游代理，把这些变量加到 `EnvironmentVariables` 里，例如：
 

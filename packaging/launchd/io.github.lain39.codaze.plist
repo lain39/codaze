@@ -16,9 +16,6 @@
   <key>KeepAlive</key>
   <true/>
 
-  <key>WorkingDirectory</key>
-  <string>/path/to/codaze-workdir</string>
-
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>

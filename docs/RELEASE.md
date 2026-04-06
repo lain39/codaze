@@ -92,3 +92,4 @@ git push origin vX.Y.Z
 - `make verify` is the everyday development check and stays separate from release/compliance tooling.
 - In the release matrix, each platform renders its own `THIRD_PARTY_LICENSES.md` with `cargo about --target <matrix-target>` before packaging.
 - GitHub Release publishing is allowed to proceed with whatever platform archives were built successfully; a failed matrix target no longer blocks already-built archives from being attached to the release.
+- The current Linux release targets are `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`; user-facing docs should describe them as binaries for reasonably recent `glibc`-based distributions, not as universal Linux packages.

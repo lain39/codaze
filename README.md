@@ -32,6 +32,10 @@ Download the platform-specific `codaze` binary from [GitHub Releases](https://gi
 ./codaze
 ```
 
+> [!NOTE]
+> The published Linux binaries are `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, intended for reasonably recent `glibc`-based distributions.
+> They are not guaranteed to run on every Linux distribution; `musl` environments such as Alpine should build from source.
+
 That starts with the defaults:
 
 - public listener: `127.0.0.1:18039`

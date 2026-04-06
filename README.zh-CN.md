@@ -32,6 +32,10 @@
 ./codaze
 ```
 
+> [!NOTE]
+> 当前发布的 Linux 二进制是 `x86_64-unknown-linux-gnu` 和 `aarch64-unknown-linux-gnu`，面向较新的 `glibc` 系发行版。
+> 不保证覆盖所有 Linux 发行版；`musl` 环境（例如 Alpine）请自行构建。
+
 这会使用默认值启动：
 
 - 业务口监听：`127.0.0.1:18039`

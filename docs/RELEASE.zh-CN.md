@@ -92,3 +92,4 @@ git push origin vX.Y.Z
 - `make verify` 只负责日常开发检查，和 release/compliance 工具链分开。
 - release matrix 里每个平台都会用 `cargo about --target <matrix-target>` 单独生成自己的 `THIRD_PARTY_LICENSES.md`，再随该平台归档一起打包。
 - GitHub Release 现在允许“部分平台先发布”：只要已经成功构建出的平台归档存在，就会先附加到 Release，失败的平台可以后续补。
+- 当前 Linux release target 是 `x86_64-unknown-linux-gnu` 和 `aarch64-unknown-linux-gnu`；文档里应明确这是面向较新的 `glibc` 系发行版，而不是“所有 Linux 通用包”。

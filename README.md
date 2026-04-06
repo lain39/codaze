@@ -167,6 +167,7 @@ Important boundary:
 - for non-Codex callers, Codaze does not synthesize `x-codex-window-id` or websocket `response.create.client_metadata` identity keys
 - `GET /v1/models` returns Codex `{"models":[...]}` only when `originator` identifies a Codex client; other callers receive OpenAI-style `{"object":"list","data":[...]}` metadata
 - `/v1/responses` pre-stream failures stay as synthetic SSE only for Codex callers; non-Codex callers receive ordinary HTTP JSON errors instead
+- on non-Codex `POST /v1/responses`, Codaze applies a small compatibility normalization set: it removes a few currently rejected fields, keeps only `service_tier: "priority"`, and rewrites legacy `web_search_preview*` aliases to `web_search`; see [docs/API.md](docs/API.md) for the exact rules
 
 For the full design rationale, see [docs/DESIGN.md](docs/DESIGN.md).
 

@@ -22,6 +22,20 @@ The format is intentionally simple and human-maintained.
 
 - Nothing yet
 
+## 0.2.1 - 2026-04-07
+
+### Added
+
+- Documentation for non-Codex `/v1/responses` compatibility normalization rules
+
+### Changed
+
+- Non-Codex `/v1/responses` now keeps compatibility normalization active even in `passthrough` fingerprint mode
+
+### Fixed
+
+- String-form `tool_choice` web-search aliases now normalize to the upstream-accepted object form
+
 ## 0.2.0 - 2026-04-07
 
 ### Added

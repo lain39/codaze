@@ -167,6 +167,7 @@ export NO_PROXY="127.0.0.1,localhost"
 - 对非 Codex 调用方，`Codaze` 不会凭空生成 `x-codex-window-id`，也不会凭空生成 websocket `response.create.client_metadata` 里的 identity key
 - `GET /v1/models` 只有在 `originator` 明确是 Codex 客户端时才返回 Codex 形状 `{"models":[...]}`；其他调用方拿到的是 OpenAI 风格 `{"object":"list","data":[...]}`
 - `/v1/responses` 的建流前失败只对 Codex 调用方保持 synthetic SSE；非 Codex 调用方会收到普通 HTTP JSON 错误
+- 对非 Codex 的 `POST /v1/responses`，Codaze 会做一小组兼容归一化：删除少量当前上游明确拒绝的字段，只保留 `service_tier: "priority"`，并把旧的 `web_search_preview*` 别名改成 `web_search`；精确规则见 [docs/API.zh-CN.md](docs/API.zh-CN.md)
 
 完整设计取舍见 [docs/DESIGN.zh-CN.md](docs/DESIGN.zh-CN.md)。
 

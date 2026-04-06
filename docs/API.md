@@ -137,6 +137,32 @@ Request notes:
   - model-derived `parallel_tool_calls`
 - the request body may contain a private `_gateway` object; it is consumed locally and stripped before forwarding
 
+#### Non-Codex compatibility normalization
+
+For non-Codex callers on `POST /v1/responses`, Codaze applies a small set of request normalizations based on current upstream behavior:
+
+- removes fields that the current upstream rejects on this path:
+  - `max_output_tokens`
+  - `max_completion_tokens`
+  - `temperature`
+  - `top_p`
+  - `truncation`
+  - `user`
+- keeps `service_tier` only when the value is `"priority"`; all other values are removed
+- rewrites legacy built-in web-search tool aliases to the stable current name:
+  - `web_search_preview` -> `web_search`
+  - `web_search_preview_2025_03_11` -> `web_search`
+- does not blanket-remove `context_management`
+- does not rewrite `input[].role == "system"` into `developer`
+- does not invent any mapping for `browser_preview`
+- this upstream path currently expects `stream: true` for non-Codex callers
+
+Example behavior:
+
+- if a non-Codex request sends `service_tier: "auto"`, Codaze removes that field before forwarding
+- if a non-Codex request sends `tools: [{"type":"web_search_preview"}]`, Codaze forwards `tools: [{"type":"web_search"}]`
+- if a non-Codex request sends array-form `context_management` compaction settings, Codaze does not remove them as part of compatibility normalization
+
 Example with `_gateway`:
 
 ```json

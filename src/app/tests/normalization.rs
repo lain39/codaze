@@ -193,7 +193,7 @@ fn normalize_responses_defaults_add_store_and_parallel_tool_calls() {
     });
 
     let snapshot = test_models_snapshot();
-    normalize_responses_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
+    normalize_responses_request_body(FingerprintMode::Normalize, true, &mut body, Some(&snapshot));
 
     assert_eq!(body["instructions"], Value::String(String::new()));
     assert_eq!(body["store"], Value::Bool(false));
@@ -209,7 +209,7 @@ fn normalize_responses_defaults_do_not_override_existing_values() {
     });
 
     let snapshot = test_models_snapshot();
-    normalize_responses_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
+    normalize_responses_request_body(FingerprintMode::Normalize, true, &mut body, Some(&snapshot));
 
     assert_eq!(body["instructions"], Value::String("keep me".to_string()));
     assert_eq!(body["store"], Value::Bool(true));
@@ -224,9 +224,190 @@ fn normalize_responses_null_instructions_becomes_empty_string() {
     });
 
     let snapshot = test_models_snapshot();
-    normalize_responses_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
+    normalize_responses_request_body(FingerprintMode::Normalize, true, &mut body, Some(&snapshot));
 
     assert_eq!(body["instructions"], Value::String(String::new()));
+}
+
+#[test]
+fn normalize_responses_non_codex_strips_rejected_fields_and_keeps_priority_service_tier() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "max_output_tokens": 10,
+        "max_completion_tokens": 11,
+        "temperature": 0.2,
+        "top_p": 0.7,
+        "truncation": "disabled",
+        "user": "user-123",
+        "service_tier": "priority"
+    });
+
+    let snapshot = test_models_snapshot();
+    normalize_responses_request_body(
+        FingerprintMode::Normalize,
+        false,
+        &mut body,
+        Some(&snapshot),
+    );
+
+    assert!(body.get("max_output_tokens").is_none());
+    assert!(body.get("max_completion_tokens").is_none());
+    assert!(body.get("temperature").is_none());
+    assert!(body.get("top_p").is_none());
+    assert!(body.get("truncation").is_none());
+    assert!(body.get("user").is_none());
+    assert_eq!(body["service_tier"], Value::String("priority".to_string()));
+}
+
+#[test]
+fn normalize_responses_non_codex_removes_non_priority_service_tier() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "service_tier": "auto"
+    });
+
+    let snapshot = test_models_snapshot();
+    normalize_responses_request_body(
+        FingerprintMode::Normalize,
+        false,
+        &mut body,
+        Some(&snapshot),
+    );
+
+    assert!(body.get("service_tier").is_none());
+}
+
+#[test]
+fn normalize_responses_non_codex_rewrites_web_search_preview_aliases() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "tools": [
+            { "type": "web_search_preview" },
+            { "type": "web_search_preview_2025_03_11" }
+        ],
+        "tool_choice": {
+            "type": "web_search_preview_2025_03_11",
+            "tools": [
+                { "type": "web_search_preview" }
+            ]
+        }
+    });
+
+    let snapshot = test_models_snapshot();
+    normalize_responses_request_body(
+        FingerprintMode::Normalize,
+        false,
+        &mut body,
+        Some(&snapshot),
+    );
+
+    assert_eq!(
+        body["tools"][0]["type"],
+        Value::String("web_search".to_string())
+    );
+    assert_eq!(
+        body["tools"][1]["type"],
+        Value::String("web_search".to_string())
+    );
+    assert_eq!(
+        body["tool_choice"]["type"],
+        Value::String("web_search".to_string())
+    );
+    assert_eq!(
+        body["tool_choice"]["tools"][0]["type"],
+        Value::String("web_search".to_string())
+    );
+}
+
+#[test]
+fn normalize_responses_non_codex_rewrites_string_tool_choice_web_search_values() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "tool_choice": "web_search_preview_2025_03_11"
+    });
+
+    let snapshot = test_models_snapshot();
+    normalize_responses_request_body(
+        FingerprintMode::Normalize,
+        false,
+        &mut body,
+        Some(&snapshot),
+    );
+
+    assert_eq!(
+        body["tool_choice"]["type"],
+        Value::String("web_search".to_string())
+    );
+
+    let mut stable_body = json!({
+        "model": "gpt-5.4",
+        "tool_choice": "web_search"
+    });
+
+    normalize_responses_request_body(
+        FingerprintMode::Normalize,
+        false,
+        &mut stable_body,
+        Some(&snapshot),
+    );
+
+    assert_eq!(
+        stable_body["tool_choice"]["type"],
+        Value::String("web_search".to_string())
+    );
+}
+
+#[test]
+fn normalize_responses_non_codex_keeps_context_management_and_system_role() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "context_management": [
+            { "type": "compaction", "compact_threshold": 12000 }
+        ],
+        "input": [
+            {
+                "role": "system",
+                "content": [{ "type": "input_text", "text": "hi" }]
+            }
+        ]
+    });
+
+    let snapshot = test_models_snapshot();
+    normalize_responses_request_body(
+        FingerprintMode::Normalize,
+        false,
+        &mut body,
+        Some(&snapshot),
+    );
+
+    assert_eq!(
+        body["context_management"][0]["type"],
+        Value::String("compaction".to_string())
+    );
+    assert_eq!(
+        body["input"][0]["role"],
+        Value::String("system".to_string())
+    );
+}
+
+#[test]
+fn normalize_responses_codex_originator_keeps_non_codex_compat_fields_untouched() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "service_tier": "auto",
+        "tools": [{ "type": "web_search_preview" }],
+        "user": "user-123"
+    });
+
+    let snapshot = test_models_snapshot();
+    normalize_responses_request_body(FingerprintMode::Normalize, true, &mut body, Some(&snapshot));
+
+    assert_eq!(body["service_tier"], Value::String("auto".to_string()));
+    assert_eq!(
+        body["tools"][0]["type"],
+        Value::String("web_search_preview".to_string())
+    );
+    assert_eq!(body["user"], Value::String("user-123".to_string()));
 }
 
 #[test]
@@ -265,13 +446,42 @@ fn passthrough_does_not_inject_defaults() {
         "model": "gpt-5.4"
     });
 
-    normalize_responses_request_body(FingerprintMode::Passthrough, &mut responses_body, None);
+    normalize_responses_request_body(
+        FingerprintMode::Passthrough,
+        false,
+        &mut responses_body,
+        None,
+    );
     normalize_compact_request_body(FingerprintMode::Passthrough, &mut compact_body, None);
 
     assert!(responses_body.get("store").is_none());
     assert!(responses_body.get("parallel_tool_calls").is_none());
     assert!(compact_body.get("store").is_none());
     assert!(compact_body.get("parallel_tool_calls").is_none());
+}
+
+#[test]
+fn passthrough_still_applies_non_codex_compatibility_normalization() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "max_output_tokens": 10,
+        "service_tier": "auto",
+        "tool_choice": "web_search_preview",
+        "user": "user-123"
+    });
+
+    normalize_responses_request_body(FingerprintMode::Passthrough, false, &mut body, None);
+
+    assert!(body.get("max_output_tokens").is_none());
+    assert!(body.get("service_tier").is_none());
+    assert!(body.get("user").is_none());
+    assert_eq!(
+        body["tool_choice"]["type"],
+        Value::String("web_search".to_string())
+    );
+    assert!(body.get("instructions").is_none());
+    assert!(body.get("store").is_none());
+    assert!(body.get("parallel_tool_calls").is_none());
 }
 
 #[test]

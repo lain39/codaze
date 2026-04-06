@@ -137,6 +137,32 @@ curl -N http://127.0.0.1:18039/v1/responses \
   - 按模型推导的 `parallel_tool_calls`
 - 请求体里允许带一个私有 `_gateway` 对象；它只在本地消费，转发前会被剥离
 
+#### 非 Codex 调用方兼容归一化
+
+对于 `POST /v1/responses` 的非 Codex 调用方，Codaze 会基于当前上游行为做一小组请求归一化：
+
+- 删除这条路径上当前上游会拒绝的字段：
+  - `max_output_tokens`
+  - `max_completion_tokens`
+  - `temperature`
+  - `top_p`
+  - `truncation`
+  - `user`
+- `service_tier` 只有值为 `"priority"` 时保留；其他值都会删除
+- 把旧的内建 web search 工具别名归一化到当前稳定名字：
+  - `web_search_preview` -> `web_search`
+  - `web_search_preview_2025_03_11` -> `web_search`
+- 不会一刀切删除 `context_management`
+- 不会把 `input[].role == "system"` 改写成 `developer`
+- 不会为 `browser_preview` 发明映射
+- 当前这条上游路径对非 Codex 调用方要求 `stream: true`
+
+行为示例：
+
+- 如果非 Codex 请求发送 `service_tier: "auto"`，Codaze 会在转发前删除该字段
+- 如果非 Codex 请求发送 `tools: [{"type":"web_search_preview"}]`，Codaze 会转发成 `tools: [{"type":"web_search"}]`
+- 如果非 Codex 请求发送数组形式的 `context_management` compaction 配置，Codaze 不会因为兼容逻辑而删除它
+
 带 `_gateway` 的样例：
 
 ```json

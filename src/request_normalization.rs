@@ -2,6 +2,7 @@ use crate::config::FingerprintMode;
 use crate::models::ModelsSnapshot;
 use axum::http::HeaderMap;
 use codex_protocol::protocol::SessionSource;
+use serde_json::Map;
 use serde_json::Value;
 
 pub(crate) const GATEWAY_CONTROL_FIELD: &str = "_gateway";
@@ -10,14 +11,17 @@ pub(crate) const SESSION_SOURCE_HEADER: &str = "x-codex-session-source";
 
 pub(crate) fn normalize_responses_request_body(
     mode: FingerprintMode,
+    codex_originator: bool,
     body: &mut Value,
     snapshot: Option<&ModelsSnapshot>,
 ) {
-    if mode != FingerprintMode::Normalize {
-        return;
-    }
-
     if let Some(object) = body.as_object_mut() {
+        if !codex_originator {
+            normalize_non_codex_responses_compatibility(object);
+        }
+        if mode != FingerprintMode::Normalize {
+            return;
+        }
         normalize_instructions_field(object);
         let default_parallel_tool_calls = Value::Bool(crate::models::default_parallel_tool_calls(
             object.get("model"),
@@ -62,6 +66,96 @@ fn normalize_instructions_field(object: &mut serde_json::Map<String, Value>) {
         None => {
             object.insert("instructions".to_string(), Value::String(String::new()));
         }
+    }
+}
+
+fn normalize_non_codex_responses_compatibility(object: &mut Map<String, Value>) {
+    for key in [
+        "max_output_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "top_p",
+        "truncation",
+        "user",
+    ] {
+        object.remove(key);
+    }
+
+    if !matches!(
+        object.get("service_tier"),
+        Some(Value::String(value)) if value == "priority"
+    ) {
+        object.remove("service_tier");
+    }
+
+    normalize_builtin_tool_aliases_at_path(object.get_mut("tools"));
+    normalize_tool_choice_aliases(object.get_mut("tool_choice"));
+}
+
+fn normalize_builtin_tool_aliases_at_path(value: Option<&mut Value>) {
+    let Some(Value::Array(tools)) = value else {
+        return;
+    };
+    for tool in tools {
+        normalize_builtin_tool_alias(tool);
+    }
+}
+
+fn normalize_tool_choice_aliases(value: Option<&mut Value>) {
+    let Some(tool_choice) = value else {
+        return;
+    };
+    match tool_choice {
+        Value::String(_) => normalize_builtin_tool_choice_string(tool_choice),
+        Value::Object(tool_choice) => {
+            if let Some(value) = tool_choice.get_mut("type") {
+                normalize_builtin_tool_alias_type(value);
+            }
+            normalize_builtin_tool_aliases_at_path(tool_choice.get_mut("tools"));
+        }
+        _ => {}
+    }
+}
+
+fn normalize_builtin_tool_alias(tool: &mut Value) {
+    let Some(tool) = tool.as_object_mut() else {
+        return;
+    };
+    if let Some(value) = tool.get_mut("type") {
+        normalize_builtin_tool_alias_type(value);
+    }
+}
+
+fn normalize_builtin_tool_alias_type(value: &mut Value) {
+    let Some(tool_type) = value.as_str() else {
+        return;
+    };
+    let normalized = normalize_builtin_tool_type(tool_type);
+    if let Some(normalized) = normalized {
+        *value = Value::String(normalized.to_string());
+    }
+}
+
+fn normalize_builtin_tool_choice_string(value: &mut Value) {
+    let Some(tool_type) = value.as_str() else {
+        return;
+    };
+    let normalized = match tool_type {
+        "web_search" => Some("web_search"),
+        other => normalize_builtin_tool_type(other),
+    };
+    if let Some(normalized) = normalized {
+        *value = Value::Object(Map::from_iter([(
+            "type".to_string(),
+            Value::String(normalized.to_string()),
+        )]));
+    }
+}
+
+fn normalize_builtin_tool_type(tool_type: &str) -> Option<&'static str> {
+    match tool_type {
+        "web_search_preview" | "web_search_preview_2025_03_11" => Some("web_search"),
+        _ => None,
     }
 }
 

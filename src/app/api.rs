@@ -118,9 +118,14 @@ pub(crate) async fn post_responses(
     mut headers: HeaderMap,
     Json(mut body): Json<Value>,
 ) -> Response {
+    let codex_originator = matches!(
+        response_shape_for_headers(&headers),
+        ModelsResponseShape::Codex
+    );
     let models_snapshot = state.models_cache.read().await.current();
     normalize_responses_request_body(
         state.config.fingerprint_mode,
+        codex_originator,
         &mut body,
         models_snapshot.as_deref(),
     );
@@ -130,10 +135,6 @@ pub(crate) async fn post_responses(
     let request_headers = headers.clone();
     let request_body = body.clone();
     let upstream_client = state.upstream.clone();
-    let codex_originator = matches!(
-        response_shape_for_headers(&headers),
-        ModelsResponseShape::Codex
-    );
     let upstream = match execute_with_failover(
         &state,
         SuccessDisposition::HoldUntilCaller,

@@ -48,8 +48,9 @@ Notes:
 
 Purpose:
 
-- selects a usable account via the current routing policy
-- forwards to upstream `GET /backend-api/codex/models`
+- selects a usable account via the current routing policy when the cache is cold
+- refreshes a cached upstream `GET /backend-api/codex/models` snapshot lazily
+- returns different response shapes based on `originator`
 
 Request:
 
@@ -57,25 +58,50 @@ Request:
 curl -sS http://127.0.0.1:18039/v1/models | jq
 ```
 
-Example response:
+Example response for non-Codex callers:
 
 ```json
-[
-  {
-    "slug": "gpt-5.4",
-    "supports_parallel_tool_calls": true
-  },
-  {
-    "slug": "gpt-5.4-mini",
-    "supports_parallel_tool_calls": true
-  }
-]
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-5.4",
+      "object": "model",
+      "created": 0,
+      "owned_by": "openai"
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "object": "model",
+      "created": 0,
+      "owned_by": "openai"
+    }
+  ]
+}
+```
+
+Example response for Codex callers:
+
+```json
+{
+  "models": [
+    {
+      "slug": "gpt-5.4",
+      "supports_parallel_tool_calls": true
+    },
+    {
+      "slug": "gpt-5.4-mini",
+      "supports_parallel_tool_calls": true
+    }
+  ]
+}
 ```
 
 Notes:
 
-- this is an upstream passthrough surface; exact fields depend on upstream
-- `normalize` / `passthrough` only affect outbound request shaping, not the response body
+- Codex shape is selected when `originator` identifies a Codex caller
+- all other callers receive OpenAI-compatible `object/data` shape
+- the gateway keeps a lazy cache of the upstream Codex models snapshot and derives `parallel_tool_calls` defaults from that cache
 
 ### `POST /v1/responses`
 
@@ -107,6 +133,7 @@ Request notes:
 
 - in `normalize` mode, the gateway injects stable Codex fields such as:
   - `store: false`
+  - `instructions: ""` when missing or `null`
   - model-derived `parallel_tool_calls`
 - the request body may contain a private `_gateway` object; it is consumed locally and stripped before forwarding
 
@@ -143,17 +170,29 @@ event: response.completed
 data: {"type":"response.completed","sequence_number":3,"response":{"id":"resp_123","object":"response","created_at":1770000000,"status":"completed","background":false}}
 ```
 
-Pre-stream failure example:
+Pre-stream failure example for Codex callers:
 
 ```text
 event: response.failed
 data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_123","object":"response","created_at":1770000000,"status":"failed","background":false,"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5.4. Please try again in 11.5s."}}}
 ```
 
+Pre-stream failure example for non-Codex callers:
+
+```json
+{
+  "error": {
+    "message": "Rate limit reached for gpt-5.4. Please try again in 11s.",
+    "code": "rate_limit_exceeded"
+  }
+}
+```
+
 Notes:
 
-- pre-stream failures on `/v1/responses` are wrapped into synthetic SSE instead of returning raw upstream HTTP 4xx/5xx to Codex
-- this exists so Codex can continue using its existing Responses error-handling path
+- pre-stream failures on `/v1/responses` are wrapped into synthetic SSE only for Codex callers
+- non-Codex callers receive ordinary HTTP JSON errors instead
+- this split exists so Codex can keep using its existing Responses error-handling path without forcing all other callers into Codex-specific SSE failure handling
 
 ### `GET /v1/responses` websocket
 
@@ -699,7 +738,7 @@ Typical business-endpoint response:
 
 Notes:
 
-- this is the unified downstream-facing error surface
+- this is one downstream-facing error surface used for ordinary JSON callers
 - it does not directly expose a specific account's quota-reset time to the client
 
 ### Upstream refresh failure

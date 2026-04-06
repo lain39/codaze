@@ -1,5 +1,8 @@
 use crate::failover::FailoverFailure;
-use crate::gateway_errors::synthetic_payload_for_pool_block;
+use crate::gateway_errors::{
+    json_error, pool_blocked_response, refresh_failure_response, synthetic_payload_for_pool_block,
+    transport_error_response_ref,
+};
 use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -11,7 +14,19 @@ use super::{
     synthetic_response_failed_payload_from_transport,
 };
 
-pub(crate) fn responses_pre_stream_failure_response(error: &FailoverFailure) -> Response {
+pub(crate) fn responses_pre_stream_failure_response(
+    error: &FailoverFailure,
+    codex_originator: bool,
+) -> Response {
+    if !codex_originator {
+        return match error {
+            FailoverFailure::Refresh(error) => refresh_failure_response(error),
+            FailoverFailure::Transport(error) => transport_error_response_ref(error),
+            FailoverFailure::PoolBlocked(summary) => pool_blocked_response(summary.clone()),
+            FailoverFailure::Json { status, message } => json_error(*status, message.clone()),
+        };
+    }
+
     let payload = match error {
         FailoverFailure::Refresh(error) => synthetic_response_failed_payload_from_http_failure(
             error.status,

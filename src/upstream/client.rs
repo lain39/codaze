@@ -20,7 +20,7 @@ impl UpstreamClient {
         base_url: String,
         codex_version: String,
         fingerprint_mode: FingerprintMode,
-        stream_timeout_seconds: u64,
+        request_timeout_seconds: u64,
     ) -> anyhow::Result<Self> {
         let client = try_build_codex_reqwest_client(&codex_version)
             .context("build Codex-aligned reqwest client")?;
@@ -40,7 +40,8 @@ impl UpstreamClient {
             refresh_client: client,
             codex_version,
             fingerprint_mode,
-            request_timeout: Some(Duration::from_secs(stream_timeout_seconds)),
+            unary_request_timeout: Some(Duration::from_secs(request_timeout_seconds)),
+            stream_request_timeout: None,
         })
     }
 }

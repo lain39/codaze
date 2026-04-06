@@ -155,6 +155,7 @@ export NO_PROXY="127.0.0.1,localhost"
 默认指纹模式是 `normalize`。它只会补齐那些真实 Codex 请求稳定携带的字段，例如：
 
 - `/v1/responses` 的 `store: false`
+- 调用方缺失 `instructions` 或显式传 `null` 时补成 `instructions: ""`
 - 按模型推导出的 `parallel_tool_calls`
 - 能从 `x-codex-session-source` 明确推导出来的 identity headers，例如 `x-openai-subagent` 和 `x-codex-parent-thread-id`
 
@@ -164,6 +165,8 @@ export NO_PROXY="127.0.0.1,localhost"
 
 - 如果调用方本来就提供了 `x-codex-window-id`，`Codaze` 会透传
 - 对非 Codex 调用方，`Codaze` 不会凭空生成 `x-codex-window-id`，也不会凭空生成 websocket `response.create.client_metadata` 里的 identity key
+- `GET /v1/models` 只有在 `originator` 明确是 Codex 客户端时才返回 Codex 形状 `{"models":[...]}`；其他调用方拿到的是 OpenAI 风格 `{"object":"list","data":[...]}`
+- `/v1/responses` 的建流前失败只对 Codex 调用方保持 synthetic SSE；非 Codex 调用方会收到普通 HTTP JSON 错误
 
 完整设计取舍见 [docs/DESIGN.zh-CN.md](docs/DESIGN.zh-CN.md)。
 

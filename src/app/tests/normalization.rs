@@ -1,5 +1,6 @@
 use super::*;
 use crate::gateway_errors::parse_retry_after;
+use crate::models::ModelsSnapshot;
 use crate::request_normalization::{
     GATEWAY_CONTROL_FIELD, SESSION_SOURCE_HEADER, apply_body_gateway_overrides,
     normalize_compact_request_body, normalize_responses_request_body,
@@ -8,6 +9,76 @@ use crate::responses::extract_retry_after;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use serde_json::{Value, json};
 use std::time::Duration;
+
+fn test_models_snapshot() -> ModelsSnapshot {
+    ModelsSnapshot::from_value(json!({
+        "models": [
+            {
+                "slug": "gpt-5.4",
+                "display_name": "GPT-5.4",
+                "description": null,
+                "default_reasoning_level": "medium",
+                "supported_reasoning_levels": [],
+                "shell_type": "shell_command",
+                "visibility": "list",
+                "supported_in_api": true,
+                "priority": 1,
+                "availability_nux": null,
+                "upgrade": null,
+                "base_instructions": "",
+                "model_messages": null,
+                "supports_reasoning_summaries": false,
+                "default_reasoning_summary": "auto",
+                "support_verbosity": false,
+                "default_verbosity": null,
+                "apply_patch_tool_type": null,
+                "web_search_tool_type": "text",
+                "truncation_policy": { "mode": "bytes", "limit": 10000 },
+                "supports_parallel_tool_calls": true,
+                "supports_image_detail_original": false,
+                "context_window": 272000,
+                "auto_compact_token_limit": null,
+                "effective_context_window_percent": 95,
+                "experimental_supported_tools": [],
+                "input_modalities": ["text", "image"],
+                "used_fallback_model_metadata": false,
+                "supports_search_tool": false
+            },
+            {
+                "slug": "gpt-5",
+                "display_name": "GPT-5",
+                "description": null,
+                "default_reasoning_level": "medium",
+                "supported_reasoning_levels": [],
+                "shell_type": "shell_command",
+                "visibility": "list",
+                "supported_in_api": true,
+                "priority": 1,
+                "availability_nux": null,
+                "upgrade": null,
+                "base_instructions": "",
+                "model_messages": null,
+                "supports_reasoning_summaries": false,
+                "default_reasoning_summary": "auto",
+                "support_verbosity": false,
+                "default_verbosity": null,
+                "apply_patch_tool_type": null,
+                "web_search_tool_type": "text",
+                "truncation_policy": { "mode": "bytes", "limit": 10000 },
+                "supports_parallel_tool_calls": false,
+                "supports_image_detail_original": false,
+                "context_window": 272000,
+                "auto_compact_token_limit": null,
+                "effective_context_window_percent": 95,
+                "experimental_supported_tools": [],
+                "input_modalities": ["text", "image"],
+                "used_fallback_model_metadata": false,
+                "supports_search_tool": false
+            }
+        ]
+    }))
+    .expect("snapshot")
+}
 
 #[test]
 fn gateway_session_source_object_is_serialized_and_stripped() {
@@ -121,8 +192,10 @@ fn normalize_responses_defaults_add_store_and_parallel_tool_calls() {
         "model": "gpt-5.4"
     });
 
-    normalize_responses_request_body(FingerprintMode::Normalize, &mut body);
+    let snapshot = test_models_snapshot();
+    normalize_responses_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
 
+    assert_eq!(body["instructions"], Value::String(String::new()));
     assert_eq!(body["store"], Value::Bool(false));
     assert_eq!(body["parallel_tool_calls"], Value::Bool(true));
 }
@@ -130,26 +203,57 @@ fn normalize_responses_defaults_add_store_and_parallel_tool_calls() {
 #[test]
 fn normalize_responses_defaults_do_not_override_existing_values() {
     let mut body = json!({
+        "instructions": "keep me",
         "store": true,
         "parallel_tool_calls": false
     });
 
-    normalize_responses_request_body(FingerprintMode::Normalize, &mut body);
+    let snapshot = test_models_snapshot();
+    normalize_responses_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
 
+    assert_eq!(body["instructions"], Value::String("keep me".to_string()));
     assert_eq!(body["store"], Value::Bool(true));
     assert_eq!(body["parallel_tool_calls"], Value::Bool(false));
 }
 
 #[test]
-fn normalize_compact_defaults_parallel_tool_calls_from_model_table() {
+fn normalize_responses_null_instructions_becomes_empty_string() {
+    let mut body = json!({
+        "instructions": null,
+        "model": "gpt-5.4"
+    });
+
+    let snapshot = test_models_snapshot();
+    normalize_responses_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
+
+    assert_eq!(body["instructions"], Value::String(String::new()));
+}
+
+#[test]
+fn normalize_compact_defaults_parallel_tool_calls_from_models_snapshot() {
     let mut body = json!({
         "model": "gpt-5"
     });
 
-    normalize_compact_request_body(FingerprintMode::Normalize, &mut body);
+    let snapshot = test_models_snapshot();
+    normalize_compact_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
 
+    assert_eq!(body["instructions"], Value::String(String::new()));
     assert_eq!(body["parallel_tool_calls"], Value::Bool(false));
     assert!(body.get("store").is_none());
+}
+
+#[test]
+fn normalize_compact_null_instructions_becomes_empty_string() {
+    let mut body = json!({
+        "instructions": null,
+        "model": "gpt-5"
+    });
+
+    let snapshot = test_models_snapshot();
+    normalize_compact_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
+
+    assert_eq!(body["instructions"], Value::String(String::new()));
 }
 
 #[test]
@@ -161,8 +265,8 @@ fn passthrough_does_not_inject_defaults() {
         "model": "gpt-5.4"
     });
 
-    normalize_responses_request_body(FingerprintMode::Passthrough, &mut responses_body);
-    normalize_compact_request_body(FingerprintMode::Passthrough, &mut compact_body);
+    normalize_responses_request_body(FingerprintMode::Passthrough, &mut responses_body, None);
+    normalize_compact_request_body(FingerprintMode::Passthrough, &mut compact_body, None);
 
     assert!(responses_body.get("store").is_none());
     assert!(responses_body.get("parallel_tool_calls").is_none());
@@ -176,7 +280,7 @@ fn unknown_models_default_parallel_tool_calls_to_true() {
         "model": "future-model"
     });
 
-    normalize_compact_request_body(FingerprintMode::Normalize, &mut body);
+    normalize_compact_request_body(FingerprintMode::Normalize, &mut body, None);
 
     assert_eq!(body["parallel_tool_calls"], Value::Bool(true));
 }

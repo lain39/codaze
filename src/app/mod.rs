@@ -9,6 +9,7 @@ use crate::accounts::{
 };
 use crate::classifier::FailureClass;
 use crate::config::{RoutingPolicy, RuntimeConfig};
+use crate::models::ModelsCache;
 use crate::upstream::UpstreamClient;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
@@ -16,6 +17,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -26,6 +28,8 @@ pub struct AppState {
     pub routing_policy: Arc<RwLock<RoutingPolicy>>,
     pub accounts: Arc<RwLock<AccountStore>>,
     pub account_disk_lock: Arc<Mutex<()>>,
+    pub models_cache: Arc<RwLock<ModelsCache>>,
+    pub models_refresh_in_flight: Arc<AtomicBool>,
     pub shutdown_token: CancellationToken,
     pub upstream: Arc<UpstreamClient>,
 }
@@ -36,7 +40,7 @@ impl AppState {
             config.upstream_base_url.clone(),
             config.codex_version.clone(),
             config.fingerprint_mode,
-            config.stream_timeout_seconds,
+            config.request_timeout_seconds,
         )?;
         let accounts = AccountStore::new(config.accounts_dir.clone());
         Ok(Self {
@@ -44,6 +48,8 @@ impl AppState {
             config: Arc::new(config),
             accounts: Arc::new(RwLock::new(accounts)),
             account_disk_lock: Arc::new(Mutex::new(())),
+            models_cache: Arc::new(RwLock::new(ModelsCache::default())),
+            models_refresh_in_flight: Arc::new(AtomicBool::new(false)),
             shutdown_token: CancellationToken::new(),
             upstream: Arc::new(upstream),
         })

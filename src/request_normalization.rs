@@ -1,4 +1,5 @@
 use crate::config::FingerprintMode;
+use crate::models::ModelsSnapshot;
 use axum::http::HeaderMap;
 use codex_protocol::protocol::SessionSource;
 use serde_json::Value;
@@ -6,25 +7,22 @@ use serde_json::Value;
 pub(crate) const GATEWAY_CONTROL_FIELD: &str = "_gateway";
 #[cfg(test)]
 pub(crate) const SESSION_SOURCE_HEADER: &str = "x-codex-session-source";
-const MODELS_WITHOUT_PARALLEL_TOOL_CALLS: &[&str] = &[
-    "gpt-5.1-codex-max",
-    "gpt-5.1-codex",
-    "gpt-5",
-    "gpt-5-codex",
-    "gpt-oss-120b",
-    "gpt-oss-20b",
-    "gpt-5.1-codex-mini",
-    "gpt-5-codex-mini",
-];
 
-pub(crate) fn normalize_responses_request_body(mode: FingerprintMode, body: &mut Value) {
+pub(crate) fn normalize_responses_request_body(
+    mode: FingerprintMode,
+    body: &mut Value,
+    snapshot: Option<&ModelsSnapshot>,
+) {
     if mode != FingerprintMode::Normalize {
         return;
     }
 
     if let Some(object) = body.as_object_mut() {
-        let default_parallel_tool_calls =
-            Value::Bool(default_parallel_tool_calls(object.get("model")));
+        normalize_instructions_field(object);
+        let default_parallel_tool_calls = Value::Bool(crate::models::default_parallel_tool_calls(
+            object.get("model"),
+            snapshot,
+        ));
         object
             .entry("store".to_string())
             .or_insert_with(|| Value::Bool(false));
@@ -34,25 +32,37 @@ pub(crate) fn normalize_responses_request_body(mode: FingerprintMode, body: &mut
     }
 }
 
-pub(crate) fn normalize_compact_request_body(mode: FingerprintMode, body: &mut Value) {
+pub(crate) fn normalize_compact_request_body(
+    mode: FingerprintMode,
+    body: &mut Value,
+    snapshot: Option<&ModelsSnapshot>,
+) {
     if mode != FingerprintMode::Normalize {
         return;
     }
 
     if let Some(object) = body.as_object_mut() {
-        let default_parallel_tool_calls =
-            Value::Bool(default_parallel_tool_calls(object.get("model")));
+        normalize_instructions_field(object);
+        let default_parallel_tool_calls = Value::Bool(crate::models::default_parallel_tool_calls(
+            object.get("model"),
+            snapshot,
+        ));
         object
             .entry("parallel_tool_calls".to_string())
             .or_insert(default_parallel_tool_calls);
     }
 }
 
-fn default_parallel_tool_calls(model: Option<&Value>) -> bool {
-    let Some(slug) = model.and_then(Value::as_str).map(str::trim) else {
-        return true;
-    };
-    !MODELS_WITHOUT_PARALLEL_TOOL_CALLS.contains(&slug)
+fn normalize_instructions_field(object: &mut serde_json::Map<String, Value>) {
+    match object.get_mut("instructions") {
+        Some(value) if value.is_null() => {
+            *value = Value::String(String::new());
+        }
+        Some(_) => {}
+        None => {
+            object.insert("instructions".to_string(), Value::String(String::new()));
+        }
+    }
 }
 
 pub(crate) fn apply_body_gateway_overrides(

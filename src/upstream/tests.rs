@@ -457,7 +457,7 @@ fn apply_http_request_timeout_sets_timeout() {
 }
 
 #[test]
-fn upstream_client_uses_stream_timeout_for_refresh_and_http_requests() {
+fn upstream_client_uses_request_timeout_for_refresh_and_unary_http_requests() {
     let client = UpstreamClient::new(
         "https://chatgpt.com/backend-api/codex".to_string(),
         "0.118.0".to_string(),
@@ -466,7 +466,20 @@ fn upstream_client_uses_stream_timeout_for_refresh_and_http_requests() {
     )
     .expect("client builds");
 
-    assert_eq!(client.request_timeout, Some(Duration::from_secs(321)));
+    assert_eq!(client.unary_request_timeout, Some(Duration::from_secs(321)));
+}
+
+#[test]
+fn upstream_client_does_not_set_total_timeout_for_stream_requests() {
+    let client = UpstreamClient::new(
+        "https://chatgpt.com/backend-api/codex".to_string(),
+        "0.118.0".to_string(),
+        FingerprintMode::Normalize,
+        321,
+    )
+    .expect("client builds");
+
+    assert_eq!(client.stream_request_timeout, None);
 }
 
 #[test]

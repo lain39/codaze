@@ -2,6 +2,11 @@ use super::*;
 use anyhow::Context;
 use tokio::sync::RwLock;
 
+use std::fs::OpenOptions;
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 
@@ -508,6 +513,12 @@ pub(crate) fn execute_account_disk_op(op: &AccountDiskOp) -> anyhow::Result<()> 
                     target.display()
                 )
             })?;
+            set_private_file_permissions(&target).with_context(|| {
+                format!(
+                    "tighten trashed account file permissions `{}`",
+                    target.display()
+                )
+            })?;
             Ok(())
         }
     }
@@ -544,12 +555,12 @@ pub(crate) fn write_account_file(path: &Path, disk: &AccountFile) -> anyhow::Res
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("account file `{}` has no parent directory", path.display()))?;
-    fs::create_dir_all(parent)
+    ensure_private_dir(parent)
         .with_context(|| format!("create account parent dir `{}`", parent.display()))?;
 
     let bytes = serde_json::to_vec_pretty(disk).context("serialize account file")?;
     let temp_path = temp_account_path(path);
-    fs::write(&temp_path, bytes)
+    write_private_file(&temp_path, &bytes)
         .with_context(|| format!("write temp account file `{}`", temp_path.display()))?;
     replace_account_file(&temp_path, path).with_context(|| {
         format!(
@@ -599,13 +610,67 @@ fn encode_wide_null(path: &Path) -> Vec<u16> {
 }
 
 pub(super) fn ensure_accounts_directories(accounts_dir: &Path) -> anyhow::Result<()> {
-    fs::create_dir_all(accounts_dir)
+    ensure_private_dir(accounts_dir)
         .with_context(|| format!("create accounts dir `{}`", accounts_dir.display()))?;
-    fs::create_dir_all(accounts_dir.join(TRASH_DIR_NAME)).with_context(|| {
+    ensure_private_dir(&accounts_dir.join(TRASH_DIR_NAME)).with_context(|| {
         format!(
             "create accounts trash dir `{}`",
             accounts_dir.join(TRASH_DIR_NAME).display()
         )
     })?;
+    Ok(())
+}
+
+fn ensure_private_dir(path: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(path)?;
+    set_private_dir_permissions(path)?;
+    Ok(())
+}
+
+fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+
+    let mut file = new_private_file(path)?;
+    use std::io::Write as _;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn new_private_file(path: &Path) -> anyhow::Result<std::fs::File> {
+    Ok(OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?)
+}
+
+#[cfg(not(unix))]
+fn new_private_file(path: &Path) -> anyhow::Result<std::fs::File> {
+    Ok(OpenOptions::new().write(true).create_new(true).open(path)?)
+}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path) -> anyhow::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_file_permissions(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_dir_permissions(path: &Path) -> anyhow::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_dir_permissions(_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }

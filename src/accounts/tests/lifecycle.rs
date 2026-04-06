@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 #[test]
 fn finish_refresh_success_keeps_memory_state_on_persist_failure() {
     let temp = tempdir().expect("tempdir");
@@ -96,6 +99,21 @@ fn auth_invalid_moves_account_file_to_trash() {
     assert_eq!(parsed.refresh_token, "rt_123");
     assert_eq!(parsed.label.as_deref(), Some("test-label"));
     assert_eq!(parsed.email.as_deref(), Some("user@example.com"));
+    #[cfg(unix)]
+    {
+        let trash_mode = std::fs::metadata(temp.path().join(TRASH_DIR_NAME))
+            .expect("trash dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(&trash_path)
+            .expect("trash file metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(trash_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+    }
     assert!(store.view(&id).is_err());
 }
 

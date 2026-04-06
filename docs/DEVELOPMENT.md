@@ -219,7 +219,8 @@ Typical `/v1/responses` flow:
 
 Behaviors worth remembering:
 
-- pre-stream failure is not returned as a raw upstream HTTP error to Codex; it is reshaped into the currently supported client-facing failure surface
+- in `normalize` mode, request normalization also treats missing or `null` `instructions` as `""`
+- pre-stream failure is not returned as a raw upstream HTTP error to Codex; it is reshaped into synthetic SSE only for Codex callers, while other callers get ordinary HTTP JSON errors
 - `previous_response_not_found` is intentionally converted into a failure path that triggers downstream reset behavior
 - `passthrough` only disables outbound request normalization; it does not bypass routing or account management
 

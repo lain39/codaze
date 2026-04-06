@@ -108,7 +108,7 @@ impl UpstreamClient {
                 &extra_headers,
                 body.as_ref(),
             );
-            apply_http_request_timeout(&mut req, self.request_timeout);
+            apply_http_request_timeout(&mut req, self.unary_request_timeout);
             configure(&mut req);
             req
         };
@@ -142,7 +142,7 @@ impl UpstreamClient {
                 &extra_headers,
                 body.as_ref(),
             );
-            apply_http_request_timeout(&mut req, self.request_timeout);
+            apply_http_request_timeout(&mut req, self.stream_request_timeout);
             configure(&mut req);
             req
         };

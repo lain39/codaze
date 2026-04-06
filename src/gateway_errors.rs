@@ -34,6 +34,10 @@ pub(crate) fn pool_blocked_response(summary: PoolBlockSummary) -> Response {
 }
 
 pub(crate) fn transport_error_response(error: codex_client::TransportError) -> Response {
+    transport_error_response_ref(&error)
+}
+
+pub(crate) fn transport_error_response_ref(error: &codex_client::TransportError) -> Response {
     match error {
         codex_client::TransportError::Http {
             status,
@@ -41,12 +45,12 @@ pub(crate) fn transport_error_response(error: codex_client::TransportError) -> R
             headers,
             ..
         } => {
-            let body = body.unwrap_or_default();
+            let body = body.clone().unwrap_or_default();
             let forwarded = headers
                 .as_ref()
                 .map(sanitize_response_headers)
                 .unwrap_or_default();
-            (status, forwarded, body).into_response()
+            (*status, forwarded, body).into_response()
         }
         other => json_error(StatusCode::BAD_GATEWAY, other.to_string()),
     }

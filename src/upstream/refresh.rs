@@ -40,7 +40,7 @@ impl UpstreamClient {
             .post(REFRESH_TOKEN_URL)
             .header(CONTENT_TYPE, "application/json")
             .json(&body);
-        let response = if let Some(timeout) = self.request_timeout {
+        let response = if let Some(timeout) = self.unary_request_timeout {
             response.timeout(timeout)
         } else {
             response

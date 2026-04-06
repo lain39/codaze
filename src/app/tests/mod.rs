@@ -30,7 +30,7 @@ fn test_config(accounts_dir: std::path::PathBuf) -> RuntimeConfig {
         fingerprint_mode: FingerprintMode::Normalize,
         upstream_base_url: "https://chatgpt.com/backend-api/codex".to_string(),
         codex_version: "0.118.0".to_string(),
-        stream_timeout_seconds: 600,
+        request_timeout_seconds: 600,
         refresh_skew_seconds: 8,
         accounts_scan_interval_seconds: 15,
         shutdown_grace_period_seconds: 10,

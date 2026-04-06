@@ -5,7 +5,7 @@ use std::path::PathBuf;
 const DEFAULT_LISTEN: &str = "127.0.0.1:18039";
 const DEFAULT_ADMIN_LISTEN: &str = "127.0.0.1:18040";
 const DEFAULT_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-const DEFAULT_STREAM_TIMEOUT_SECONDS: u64 = 600;
+const DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 600;
 const DEFAULT_REFRESH_SKEW_SECONDS: i64 = 8;
 pub const DEFAULT_ACCOUNTS_SCAN_INTERVAL_SECONDS: u64 = 15;
 pub const DEFAULT_CODEX_VERSION: &str = "0.118.0";
@@ -74,7 +74,7 @@ pub struct RuntimeConfig {
     pub fingerprint_mode: FingerprintMode,
     pub upstream_base_url: String,
     pub codex_version: String,
-    pub stream_timeout_seconds: u64,
+    pub request_timeout_seconds: u64,
     pub refresh_skew_seconds: i64,
     pub accounts_scan_interval_seconds: u64,
     pub shutdown_grace_period_seconds: u64,
@@ -177,7 +177,7 @@ impl RuntimeConfig {
             fingerprint_mode,
             upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_string(),
             codex_version,
-            stream_timeout_seconds: DEFAULT_STREAM_TIMEOUT_SECONDS,
+            request_timeout_seconds: DEFAULT_REQUEST_TIMEOUT_SECONDS,
             refresh_skew_seconds: DEFAULT_REFRESH_SKEW_SECONDS,
             accounts_scan_interval_seconds: DEFAULT_ACCOUNTS_SCAN_INTERVAL_SECONDS,
             shutdown_grace_period_seconds,

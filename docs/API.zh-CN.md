@@ -48,8 +48,9 @@ curl -sS http://127.0.0.1:18039/health | jq
 
 用途：
 
-- 按当前路由逻辑选一个可用账号
-- 将请求转发到上游 `GET /backend-api/codex/models`
+- 缓存冷时按当前路由逻辑选一个可用账号
+- 惰性刷新一份上游 `GET /backend-api/codex/models` 快照
+- 根据 `originator` 返回不同响应形状
 
 请求：
 
@@ -57,25 +58,50 @@ curl -sS http://127.0.0.1:18039/health | jq
 curl -sS http://127.0.0.1:18039/v1/models | jq
 ```
 
-响应样例：
+非 Codex 调用方的响应样例：
 
 ```json
-[
-  {
-    "slug": "gpt-5.4",
-    "supports_parallel_tool_calls": true
-  },
-  {
-    "slug": "gpt-5.4-mini",
-    "supports_parallel_tool_calls": true
-  }
-]
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-5.4",
+      "object": "model",
+      "created": 0,
+      "owned_by": "openai"
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "object": "model",
+      "created": 0,
+      "owned_by": "openai"
+    }
+  ]
+}
+```
+
+Codex 调用方的响应样例：
+
+```json
+{
+  "models": [
+    {
+      "slug": "gpt-5.4",
+      "supports_parallel_tool_calls": true
+    },
+    {
+      "slug": "gpt-5.4-mini",
+      "supports_parallel_tool_calls": true
+    }
+  ]
+}
 ```
 
 说明：
 
-- 这是上游透传接口，具体字段以当时上游返回为准
-- `normalize` / `passthrough` 只影响出站请求指纹，不改响应体
+- `originator` 明确是 Codex 时返回 Codex 形状
+- 其他调用方返回 OpenAI 兼容的 `object/data` 形状
+- 网关会缓存一份上游 Codex models 快照，并用它推导默认的 `parallel_tool_calls`
 
 ### `POST /v1/responses`
 
@@ -107,6 +133,7 @@ curl -N http://127.0.0.1:18039/v1/responses \
 
 - `normalize` 模式下，网关会按 Codex 习惯补齐稳定字段，例如：
   - `store: false`
+  - `instructions` 缺失或为 `null` 时补成 `""`
   - 按模型推导的 `parallel_tool_calls`
 - 请求体里允许带一个私有 `_gateway` 对象；它只在本地消费，转发前会被剥离
 
@@ -143,17 +170,29 @@ event: response.completed
 data: {"type":"response.completed","sequence_number":3,"response":{"id":"resp_123","object":"response","created_at":1770000000,"status":"completed","background":false}}
 ```
 
-建流前失败样例：
+Codex 调用方的建流前失败样例：
 
 ```text
 event: response.failed
 data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_123","object":"response","created_at":1770000000,"status":"failed","background":false,"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5.4. Please try again in 11.5s."}}}
 ```
 
+非 Codex 调用方的建流前失败样例：
+
+```json
+{
+  "error": {
+    "message": "Rate limit reached for gpt-5.4. Please try again in 11s.",
+    "code": "rate_limit_exceeded"
+  }
+}
+```
+
 说明：
 
-- `/v1/responses` 的建流前失败会被包装成一条 synthetic SSE，而不是直接把原始 HTTP 4xx/5xx 回给 Codex
-- 这是为了让 Codex 下游继续走它已支持的 Responses 错误解析链
+- `/v1/responses` 的建流前失败只对 Codex 调用方包装成 synthetic SSE
+- 非 Codex 调用方会直接收到普通 HTTP JSON 错误
+- 这样 Codex 仍能走它已支持的 Responses 错误解析链，而其他客户端不用处理 Codex 专用的 SSE 失败面
 
 ### `GET /v1/responses` websocket
 
@@ -698,7 +737,7 @@ curl -sS -X PUT http://127.0.0.1:18040/admin/routing/policy \
 
 说明：
 
-- 这是面向下游客户端的统一错误
+- 这是普通 JSON 调用方会看到的一种下游错误形状
 - 不会把某个具体账号的额度恢复时间直接暴露给下游
 
 ### 上游 refresh 失败

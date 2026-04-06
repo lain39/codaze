@@ -67,7 +67,8 @@ pub struct UpstreamClient {
     refresh_client: Client,
     codex_version: String,
     fingerprint_mode: FingerprintMode,
-    request_timeout: Option<Duration>,
+    unary_request_timeout: Option<Duration>,
+    stream_request_timeout: Option<Duration>,
 }
 
 pub struct UpstreamUnaryResponse {

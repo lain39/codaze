@@ -155,6 +155,7 @@ Codaze intentionally reuses Codex's Rust transport stack instead of inventing a 
 The default fingerprint mode is `normalize`. It only injects fields that real Codex requests stably carry, such as:
 
 - `store: false` on `/v1/responses`
+- `instructions: ""` when the caller omits `instructions` or sends `null`
 - model-derived `parallel_tool_calls`
 - identity headers derivable from `x-codex-session-source`, such as `x-openai-subagent` and `x-codex-parent-thread-id`
 
@@ -164,6 +165,8 @@ Important boundary:
 
 - if the caller already provides `x-codex-window-id`, Codaze forwards it
 - for non-Codex callers, Codaze does not synthesize `x-codex-window-id` or websocket `response.create.client_metadata` identity keys
+- `GET /v1/models` returns Codex `{"models":[...]}` only when `originator` identifies a Codex client; other callers receive OpenAI-style `{"object":"list","data":[...]}` metadata
+- `/v1/responses` pre-stream failures stay as synthetic SSE only for Codex callers; non-Codex callers receive ordinary HTTP JSON errors instead
 
 For the full design rationale, see [docs/DESIGN.md](docs/DESIGN.md).
 

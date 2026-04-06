@@ -1,5 +1,8 @@
 use super::*;
-use crate::accounts::disk::write_account_file;
+use crate::accounts::disk::{ensure_accounts_directories, write_account_file};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn import_account_persists_json_file() {
@@ -116,6 +119,60 @@ fn write_account_file_overwrites_existing_file() {
             email: Some("new@example.com".to_string()),
         }
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn write_account_file_uses_private_permissions() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("account.json");
+
+    write_account_file(
+        &path,
+        &AccountFile {
+            refresh_token: "rt_secret".to_string(),
+            label: Some("secret".to_string()),
+            email: Some("secret@example.com".to_string()),
+        },
+    )
+    .expect("write account file");
+
+    let file_mode = std::fs::metadata(&path)
+        .expect("file metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    let dir_mode = std::fs::metadata(temp.path())
+        .expect("dir metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+
+    assert_eq!(file_mode, 0o600);
+    assert_eq!(dir_mode, 0o700);
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_accounts_directories_uses_private_permissions() {
+    let temp = tempdir().expect("tempdir");
+    let accounts_dir = temp.path().join("accounts");
+
+    ensure_accounts_directories(&accounts_dir).expect("ensure accounts dirs");
+
+    let accounts_mode = std::fs::metadata(&accounts_dir)
+        .expect("accounts dir metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    let trash_mode = std::fs::metadata(accounts_dir.join(TRASH_DIR_NAME))
+        .expect("trash dir metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+
+    assert_eq!(accounts_mode, 0o700);
+    assert_eq!(trash_mode, 0o700);
 }
 
 #[test]

@@ -219,7 +219,8 @@ cargo build
 
 需要特别注意的行为：
 
-- pre-stream failure 不直接把原始 HTTP 错误裸透给 Codex，而是按当前规则转换成客户端可消费的失败面
+- `normalize` 模式下，请求归一化还会把缺失或为 `null` 的 `instructions` 统一补成 `""`
+- pre-stream failure 不直接把原始 HTTP 错误裸透给 Codex；只有 Codex 调用方会收到 synthetic SSE，其他调用方拿到的是普通 HTTP JSON 错误
 - `previous_response_not_found` 会按现有约定转换成可触发下游 reset 的失败路径
 - `passthrough` 只是不做出站指纹整形，不影响本地路由和账号管理
 

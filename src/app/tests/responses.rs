@@ -317,7 +317,7 @@ async fn responses_pre_stream_http_429_returns_synthetic_sse() {
                     .to_string(),
             ),
         },
-    ));
+    ), true);
 
     let (status, headers, body) = response_parts(response).await;
     assert_eq!(status, StatusCode::OK);
@@ -383,7 +383,7 @@ async fn responses_pre_stream_refresh_quota_failure_returns_synthetic_sse() {
             class: FailureClass::QuotaExhausted,
             retry_after: None,
         },
-    ));
+    ), true);
 
     let (status, headers, body) = response_parts(response).await;
     assert_eq!(status, StatusCode::OK);
@@ -401,14 +401,15 @@ async fn responses_pre_stream_refresh_quota_failure_returns_synthetic_sse() {
 
 #[tokio::test]
 async fn responses_pre_stream_non_json_500_returns_synthetic_sse() {
-    let response = responses_pre_stream_failure_response(&FailoverFailure::Transport(
-        codex_client::TransportError::Http {
+    let response = responses_pre_stream_failure_response(
+        &FailoverFailure::Transport(codex_client::TransportError::Http {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             url: None,
             headers: None,
             body: Some("upstream exploded".to_string()),
-        },
-    ));
+        }),
+        true,
+    );
 
     let (status, headers, body) = response_parts(response).await;
     assert_eq!(status, StatusCode::OK);
@@ -421,6 +422,67 @@ async fn responses_pre_stream_non_json_500_returns_synthetic_sse() {
     let text = String::from_utf8(body.to_vec()).expect("utf8");
     assert!(text.contains("\"code\":\"internal_server_error\""));
     assert!(text.contains("\"message\":\"Upstream request failed with status 500.\""));
+}
+
+#[tokio::test]
+async fn responses_pre_stream_http_429_returns_json_error_for_non_codex_clients() {
+    let response = responses_pre_stream_failure_response(
+        &FailoverFailure::Transport(codex_client::TransportError::Http {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            url: None,
+            headers: Some({
+                let mut headers = HeaderMap::new();
+                headers.insert("retry-after", HeaderValue::from_static("11"));
+                headers.insert(
+                    "x-codex-primary-used-percent",
+                    HeaderValue::from_static("95.0"),
+                );
+                headers
+            }),
+            body: Some(
+                "{\"error\":{\"message\":\"Rate limit reached for gpt-5.4. Please try again in 11s.\",\"code\":\"rate_limit_exceeded\"}}"
+                    .to_string(),
+            ),
+        }),
+        false,
+    );
+
+    let (status, headers, body) = response_parts(response).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_ne!(
+        headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    assert!(headers.get("connection").is_none());
+    let text = String::from_utf8(body.to_vec()).expect("utf8");
+    assert!(text.contains("\"code\":\"rate_limit_exceeded\""));
+    assert!(!text.contains("response.failed"));
+}
+
+#[tokio::test]
+async fn responses_pre_stream_pool_block_returns_json_error_for_non_codex_clients() {
+    let response = responses_pre_stream_failure_response(
+        &FailoverFailure::PoolBlocked(crate::accounts::PoolBlockSummary {
+            blocked_reason: crate::accounts::BlockedReason::QuotaExhausted,
+            blocked_until: None,
+            retry_after: None,
+        }),
+        false,
+    );
+
+    let (status, headers, body) = response_parts(response).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_ne!(
+        headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    let text = String::from_utf8(body.to_vec()).expect("utf8");
+    assert!(text.contains("No account available right now. Try again later."));
+    assert!(!text.contains("response.failed"));
 }
 
 #[tokio::test]

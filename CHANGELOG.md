@@ -22,6 +22,23 @@ The format is intentionally simple and human-maintained.
 
 - Nothing yet
 
+## 0.2.0 - 2026-04-07
+
+### Added
+
+- OpenAI-compatible `/v1/models` shape for non-Codex callers while keeping Codex `{"models":[...]}`
+- Non-Codex `/v1/responses` pre-stream failures now return ordinary HTTP JSON errors instead of Codex-only synthetic SSE
+- Request normalization now fills missing or `null` `instructions` with `""`
+
+### Changed
+
+- `/v1/models` now refreshes and caches the upstream Codex models snapshot, and uses that snapshot to derive `parallel_tool_calls`
+- Streaming `/v1/responses` requests no longer inherit the 600-second total request timeout used for unary HTTP and refresh requests
+
+### Fixed
+
+- Account directories and persisted refresh-token files now tighten permissions instead of relying on process `umask`
+
 ## 0.1.0 - 2026-04-06
 
 ### Added

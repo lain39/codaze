@@ -354,8 +354,9 @@ This is intentional.
 
 Client-facing errors:
 
-- are kept as unified, retry-friendly, and sanitized as practical
+- are kept as retry-friendly and sanitized as practical
 - avoid leaking per-account details
+- may still differ by caller surface, for example Codex-style SSE versus ordinary HTTP JSON
 - for example, when the whole pool is unavailable, clients see:
   - `No account available right now. Try again later.`
 
@@ -445,6 +446,8 @@ Then decide:
 
 ### All accounts are unavailable
 
-The client usually only sees a unified error. It will not tell you which account hit which quota or risk-control path.
+The client usually only sees a sanitized error. It will not tell you which account hit which quota or risk-control path.
+
+The exact error shape can still depend on the caller surface, for example Codex-style SSE versus ordinary HTTP JSON.
 
 In that situation, trust `/admin/accounts`, not the sanitized client-facing error surface.

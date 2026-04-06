@@ -6,8 +6,11 @@ use crate::failover::{
     execute_with_failover, execute_with_failover_after_selection, resolve_selection_failure,
 };
 use crate::upstream::RefreshFailure;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
-use axum::{Json, extract::State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
+use axum::{
+    Json,
+    extract::{OriginalUri, State},
+};
 use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::{Value, json};
@@ -236,7 +239,12 @@ async fn responses_when_pool_is_blocked_returns_synthetic_quota_event() {
 
     let response = post_responses(
         State(state),
-        HeaderMap::new(),
+        OriginalUri(Uri::from_static("/v1/responses")),
+        {
+            let mut headers = HeaderMap::new();
+            headers.insert("originator", HeaderValue::from_static("codex-tui"));
+            headers
+        },
         Json(json!({
             "model": "gpt-5.4",
             "input": [{

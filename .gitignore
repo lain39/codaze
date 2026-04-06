@@ -1,0 +1,19 @@
+/target/
+
+# Generated release/compliance artifacts
+/THIRD_PARTY_LICENSES.md
+/dist/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.orig
+*.rej
+
+# Local environment overrides
+.env
+.env.*
+/.cargo/config.toml
+/.codaze-local/
+/local/

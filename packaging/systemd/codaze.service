@@ -1,0 +1,20 @@
+[Unit]
+Description=Codaze local Codex gateway
+Documentation=https://github.com/lain39/codaze
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/path/to/codaze
+Restart=on-failure
+RestartSec=3
+Environment=RUST_LOG=info
+# Optional overrides:
+# Environment=HOME=/path/to/home
+# WorkingDirectory=/path/to/codaze-workdir
+# To override defaults, append flags to ExecStart, for example:
+# ExecStart=/path/to/codaze --listen 127.0.0.1:18039 --admin-listen 127.0.0.1:18040
+
+[Install]
+WantedBy=multi-user.target

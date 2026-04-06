@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a focused improvement for codaze
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should codaze do?
+    validations:
+      required: true
+  - type: textarea
+    id: codex_alignment
+    attributes:
+      label: Codex alignment
+      description: If relevant, explain how this stays aligned with Codex wire behavior.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

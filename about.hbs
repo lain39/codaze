@@ -1,0 +1,21 @@
+# Third-Party Licenses
+
+This file is generated for `codaze` with `cargo-about`.
+Do not edit it by hand.
+
+{{#each licenses}}
+## {{name}}
+
+Used by:
+{{#each used_by}}
+- `{{crate.name}} {{crate.version}}`
+{{/each}}
+
+{{#each texts}}
+### {{../name}}
+
+```text
+{{text}}
+```
+{{/each}}
+{{/each}}

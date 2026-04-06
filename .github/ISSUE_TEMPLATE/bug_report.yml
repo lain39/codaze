@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a bug in codaze
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Exact steps or requests to reproduce the problem.
+      placeholder: |
+        1. Start codaze with ...
+        2. Import account with ...
+        3. Send request to ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and traces
+      description: Redact refresh tokens, access tokens, and local absolute paths before pasting.
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      placeholder: |
+        OS:
+        Rust:
+        codaze version:
+        Codex version:

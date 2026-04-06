@@ -1,0 +1,15 @@
+Codaze
+Copyright 2026 lain39
+
+This product is distributed under the Apache License, Version 2.0.
+
+Codaze is an independent project that intentionally aligns its outbound
+transport and wire behavior with the OpenAI Codex Rust workspace.
+Some modules were developed with reference to upstream Codex behavior and
+protocol details, especially around request shaping, headers, and the
+Responses websocket/SSE surface.
+
+OpenAI Codex Rust workspace:
+https://github.com/openai/codex
+
+This NOTICE file is provided for attribution and informational purposes only.

@@ -1,0 +1,50 @@
+[package]
+name = "codaze"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", features = ["http1", "json", "tokio", "ws"] }
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+codex-client = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
+codex-login = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
+codex-protocol = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
+codex-terminal-detection = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
+codex-utils-rustls-provider = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
+futures = "0.3"
+http = "1"
+os_info = "3.12.0"
+reqwest = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
+url = "2"
+
+[dev-dependencies]
+codex-api = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59.0", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+[patch.crates-io]
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
+
+[patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1

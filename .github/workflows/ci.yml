@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: codaze
+    steps:
+      - name: Checkout codaze
+        uses: actions/checkout@v5
+        with:
+          path: codaze
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codaze -> target
+
+      - name: Check local Codex override is not active
+        run: bash scripts/check-no-local-codex-override.sh
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test -q
+
+  compliance:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: codaze
+    steps:
+      - name: Checkout codaze
+        uses: actions/checkout@v5
+        with:
+          path: codaze
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codaze -> target
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.8.4
+
+      - name: Check local Codex override is not active
+        run: bash scripts/check-no-local-codex-override.sh
+
+      - name: Run cargo-deny
+        run: cargo deny check
+
+      - name: Generate third-party licenses
+        run: cargo about -L off generate --output-file THIRD_PARTY_LICENSES.md about.hbs
+
+      - name: Upload generated license report
+        uses: actions/upload-artifact@v6
+        with:
+          name: third-party-licenses
+          path: codaze/THIRD_PARTY_LICENSES.md

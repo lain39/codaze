@@ -1,0 +1,7 @@
+[patch."https://github.com/openai/codex.git"]
+codex-api = { path = "local/codex/codex-rs/codex-api" }
+codex-client = { path = "local/codex/codex-rs/codex-client" }
+codex-login = { path = "local/codex/codex-rs/login" }
+codex-protocol = { path = "local/codex/codex-rs/protocol" }
+codex-terminal-detection = { path = "local/codex/codex-rs/terminal-detection" }
+codex-utils-rustls-provider = { path = "local/codex/codex-rs/utils/rustls-provider" }

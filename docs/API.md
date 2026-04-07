@@ -118,6 +118,7 @@ curl -N http://127.0.0.1:18039/v1/responses \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "gpt-5.4",
+    "stream": true,
     "input": [
       {
         "role": "user",
@@ -136,6 +137,7 @@ Request notes:
   - `instructions: ""` when missing or `null`
   - model-derived `parallel_tool_calls`
 - the request body may contain a private `_gateway` object; it is consumed locally and stripped before forwarding
+- for non-Codex callers, you should explicitly send `"stream": true`; on the current upstream path, omitting it commonly returns `400 {"detail":"Stream must be set to true"}`
 
 #### Non-Codex compatibility normalization
 

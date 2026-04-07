@@ -118,6 +118,7 @@ curl -N http://127.0.0.1:18039/v1/responses \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "gpt-5.4",
+    "stream": true,
     "input": [
       {
         "role": "user",
@@ -136,6 +137,7 @@ curl -N http://127.0.0.1:18039/v1/responses \
   - `instructions` 缺失或为 `null` 时补成 `""`
   - 按模型推导的 `parallel_tool_calls`
 - 请求体里允许带一个私有 `_gateway` 对象；它只在本地消费，转发前会被剥离
+- 对非 Codex 调用方，建议显式携带 `"stream": true`；当前这条上游路径缺失该字段时，常见返回是 `400 {"detail":"Stream must be set to true"}`
 
 #### 非 Codex 调用方兼容归一化
 

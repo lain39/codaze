@@ -14,6 +14,7 @@
 </p>
 
 文档索引：[docs/README.zh-CN.md](docs/README.zh-CN.md)  
+友链：<a href="https://linux.do" target="_blank"><img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=for-the-badge&logo=linux&logoColor=white" alt="LINUX DO" style="max-width: 100px" /></a>
 
 ---
 
@@ -143,6 +144,10 @@ export NO_PROXY="127.0.0.1,localhost"
 | | `GET/PUT`| `/admin/routing/policy` | 查看/动态切换路由策略 |
 
 > 详细入参和返回值规范，请参阅 [API 文档](docs/API.zh-CN.md) 
+
+> [!IMPORTANT]
+> 如果你是用非 Codex 调用方直接请求 `POST /v1/responses`，请求体里应显式带上 `"stream": true`。
+> 当前这条上游路径对非 Codex 调用方要求流式模式；缺失时常见返回是 `400 {"detail":"Stream must be set to true"}`。
 
 ## Codex 兼容性
 

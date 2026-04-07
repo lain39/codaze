@@ -14,6 +14,7 @@
 </p>
 
 Docs index: [docs/README.md](docs/README.md)  
+Friend link: <a href="https://linux.do" target="_blank"><img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=for-the-badge&logo=linux&logoColor=white" alt="LINUX DO" style="max-width: 100px" /></a>
 
 ---
 
@@ -143,6 +144,10 @@ Notes:
 | | `GET/PUT` | `/admin/routing/policy` | Read or change routing policy |
 
 > For full request and response shapes, see [docs/API.md](docs/API.md).
+
+> [!IMPORTANT]
+> If you call `POST /v1/responses` directly from a non-Codex client, include `"stream": true` explicitly in the JSON body.
+> This upstream path currently expects streaming mode for non-Codex callers; otherwise a common response is `400 {"detail":"Stream must be set to true"}`.
 
 ## Codex Compatibility
 

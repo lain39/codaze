@@ -170,6 +170,7 @@ Example with `_gateway`:
 ```json
 {
   "model": "gpt-5.4",
+  "stream": true,
   "instructions": "You are a helpful assistant.",
   "input": [
     {

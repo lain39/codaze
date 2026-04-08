@@ -6,6 +6,8 @@ This directory keeps the project-specific reference docs that are too detailed f
 
 - [API.md](API.md)
   - Request and response examples for public and admin endpoints
+- [FAQ.md](FAQ.md)
+  - Common compatibility questions, 400 behavior boundaries, and caller troubleshooting
 - [DESIGN.md](DESIGN.md)
   - Product boundaries, fingerprint rules, and architecture decisions
 - [DEVELOPMENT.md](DEVELOPMENT.md)

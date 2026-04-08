@@ -21,7 +21,7 @@
 ## 为什么选择 Codaze
 
 - **高贴近指纹 (Fingerprint Alignment)**： 复用 Codex 原生的 Rust 传输栈。出站网络行为、HTTP 头和 Websocket 特征尽量贴近官方客户端，同时明确保留轻量网关的设计边界。
-- **故障切换与协议整形 (Failover & Protocol Surgery)**： 在账号限流或特定失败场景下切换账号，并对部分关键错误做协议层改写，例如把 `previous_response_not_found` 转成可触发客户端 reset 的错误，引导上游客户端平滑重置。
+- **故障切换与协议整形 (Failover & Protocol Surgery)**： 在账号限流或特定失败场景下切换账号，并对部分关键错误做协议层改写，例如把 `previous_response_not_found` 转成可触发客户端 reset 的错误，引导下游客户端平滑重置。
 - **惰性刷新 (Lazy Initialization)**： 账号按需刷新，避免启动时批量请求暴露特征。
 - **物理隔离与零配置 (Zero-Bloat & Secure)**： 没有复杂的 YAML，以目录结构作为天然数据库；业务流与管理 API 双端口物理隔离，且强制绑定本地回环。
 
@@ -29,13 +29,17 @@
 
 从 [GitHub Releases](https://github.com/lain39/codaze/releases) 下载对应平台的 `codaze` 二进制后直接运行（开箱即用）：
 
+> [!NOTE]
+> 当前发布的 Linux 二进制是 `x86_64-unknown-linux-gnu` 和 `aarch64-unknown-linux-gnu`，面向较新的 `glibc` 系发行版。
+> 不保证覆盖所有 Linux 发行版；`musl` 环境（例如 Alpine）请自行构建。
+
 ```bash
 ./codaze
 ```
 
 > [!NOTE]
-> 当前发布的 Linux 二进制是 `x86_64-unknown-linux-gnu` 和 `aarch64-unknown-linux-gnu`，面向较新的 `glibc` 系发行版。
-> 不保证覆盖所有 Linux 发行版；`musl` 环境（例如 Alpine）请自行构建。
+> 如果你需要通过代理访问上游，请先设置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 等环境变量，再启动 `codaze`。
+> 具体写法见下文的 [代理环境变量](#代理环境变量)。
 
 这会使用默认值启动：
 
@@ -118,6 +122,14 @@ export HTTP_PROXY="http://127.0.0.1:3128"
 export HTTPS_PROXY="http://127.0.0.1:3128"
 export ALL_PROXY="socks5h://127.0.0.1:1080"
 export NO_PROXY="127.0.0.1,localhost"
+```
+
+如果你只想让代理对这一次启动生效，也可以直接内联：
+
+```bash
+HTTP_PROXY="http://127.0.0.1:3128" \
+HTTPS_PROXY="http://127.0.0.1:3128" \
+./codaze
 ```
 
 说明：

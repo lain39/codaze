@@ -280,6 +280,7 @@ curl -N http://127.0.0.1:18039/v1/responses \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "gpt-5.4",
+    "stream": true,
     "instructions": "",
     "input": [
       {

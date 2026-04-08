@@ -21,7 +21,7 @@ Friend link: <a href="https://linux.do" target="_blank"><img src="https://img.sh
 ## Why Codaze
 
 - **High-fidelity fingerprint alignment**: Reuses Codex's native Rust transport stack so outbound network behavior, HTTP headers, and websocket characteristics stay as close as practical to the official client, while still keeping the gateway intentionally lightweight.
-- **Failover and protocol surgery**: Switches accounts on quota or selected failure paths, and rewrites a few critical protocol-level errors when needed, such as converting `previous_response_not_found` into a client-reset-triggering error to prompt the upstream client to gracefully reset.
+- **Failover and protocol surgery**: Switches accounts on quota or selected failure paths, and rewrites a few critical protocol-level errors when needed, such as converting `previous_response_not_found` into a client-reset-triggering error to prompt the downstream client to gracefully reset.
 - **Lazy initialization**: Accounts refresh on demand instead of during startup, which avoids noisy bulk refreshes.
 - **Zero-bloat local isolation**: No YAML-heavy control plane; the account directory acts as the durable source of truth, while public and admin APIs are physically separated onto different loopback ports.
 
@@ -29,13 +29,17 @@ Friend link: <a href="https://linux.do" target="_blank"><img src="https://img.sh
 
 Download the platform-specific `codaze` binary from [GitHub Releases](https://github.com/lain39/codaze/releases), then run it directly:
 
+> [!NOTE]
+> The published Linux binaries are `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, intended for reasonably recent `glibc`-based distributions.
+> They are not guaranteed to run on every Linux distribution; `musl` environments such as Alpine should build from source.
+
 ```bash
 ./codaze
 ```
 
 > [!NOTE]
-> The published Linux binaries are `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, intended for reasonably recent `glibc`-based distributions.
-> They are not guaranteed to run on every Linux distribution; `musl` environments such as Alpine should build from source.
+> If you need an upstream proxy, set `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and related environment variables before starting `codaze`.
+> See [Proxy Environment Variables](#proxy-environment-variables) below for examples.
 
 That starts with the defaults:
 
@@ -118,6 +122,14 @@ export HTTP_PROXY="http://127.0.0.1:3128"
 export HTTPS_PROXY="http://127.0.0.1:3128"
 export ALL_PROXY="socks5h://127.0.0.1:1080"
 export NO_PROXY="127.0.0.1,localhost"
+```
+
+If you only want the proxy to apply to this one launch, you can inline it directly:
+
+```bash
+HTTP_PROXY="http://127.0.0.1:3128" \
+HTTPS_PROXY="http://127.0.0.1:3128" \
+./codaze
 ```
 
 Notes:

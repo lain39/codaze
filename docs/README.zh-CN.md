@@ -6,6 +6,8 @@
 
 - [API.zh-CN.md](API.zh-CN.md)
   - 业务接口和管理接口的请求、响应样例
+- [FAQ.zh-CN.md](FAQ.zh-CN.md)
+  - 常见兼容性问题、400 行为边界和调用方排障
 - [DESIGN.zh-CN.md](DESIGN.zh-CN.md)
   - 产品边界、指纹策略和架构取舍
 - [DEVELOPMENT.zh-CN.md](DEVELOPMENT.zh-CN.md)

@@ -133,11 +133,20 @@ Codex websocket `response.create` 里的 `client_metadata` 现在也会带 ident
 - `x-openai-subagent`
 - `x-codex-parent-thread-id`
 - `x-codex-turn-metadata`
+- `x-codex-installation-id`
 
-这里的原则和上面一样：
+对于那些依赖客户端本地线程 / session 状态的字段，这里的原则和上面一样：
 
 - 有真实来源时透传
 - 需要依赖客户端内部 session 状态的值，不在网关里瞎编
+
+`x-codex-installation-id` 是个例外。当前 Codex 会把它作为稳定 installation 标识发出，而
+Codaze 把它视为“当前选中的上游账号指纹”，不是“下游线程状态字段”：
+
+- `normalize` 模式下，Codaze 会根据当前选中的上游 `ChatGPT-Account-ID` 派生一个稳定 UUID
+- 并把它写入 `/v1/responses` 的 `client_metadata`、`/v1/responses/compact` 的请求头，以及 websocket `response.create.client_metadata`
+- `passthrough` 模式下，Codaze 不主动生成，也不覆盖这个字段
+- 如果 websocket 在 pre-commit 阶段 failover 到替代上游账号，重放的 `response.create` 会按新上游连接对应的 installation id 改写，保证每条上游 websocket 连接内部看到的值一致
 
 ## 7. 为什么不在网关里重建完整会话状态机
 

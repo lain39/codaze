@@ -1,4 +1,7 @@
 use super::client::build_codex_user_agent;
+use super::fingerprint::{
+    X_CODEX_INSTALLATION_ID_HEADER, apply_responses_installation_id, stable_installation_id,
+};
 use super::headers::{
     OPENAI_BETA_HEADER, RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE, SESSION_SOURCE_HEADER,
     build_models_extra_headers, build_responses_extra_headers, build_responses_websocket_headers,
@@ -9,6 +12,7 @@ use super::http::{
 };
 use super::*;
 use ::http::header::{ACCEPT, HeaderValue};
+use serde_json::Value;
 
 #[test]
 fn appends_client_version_query() {
@@ -21,24 +25,24 @@ fn appends_client_version_query() {
         timeout: None,
     };
 
-    append_client_version_query(&mut req, "0.117.0");
+    append_client_version_query(&mut req, "0.120.0");
 
     assert_eq!(
         req.url,
-        "https://chatgpt.com/backend-api/codex/models?client_version=0.117.0"
+        "https://chatgpt.com/backend-api/codex/models?client_version=0.120.0"
     );
 }
 
 #[test]
 fn user_agent_uses_configured_codex_version() {
-    let user_agent = build_codex_user_agent("0.117.0");
+    let user_agent = build_codex_user_agent("0.120.0");
     let prefix = format!(
-        "{}/0.117.0 ",
+        "{}/0.120.0 ",
         codex_login::default_client::originator().value
     );
 
     assert!(user_agent.starts_with(&prefix));
-    assert!(user_agent.ends_with(" (codex-tui; 0.117.0)"));
+    assert!(user_agent.ends_with(" (codex-tui; 0.120.0)"));
 }
 
 #[test]
@@ -46,7 +50,7 @@ fn models_headers_forward_incoming_fingerprint_in_passthrough_mode() {
     let mut incoming = HeaderMap::new();
     incoming.insert(
         "user-agent",
-        HeaderValue::from_static("codex_cli_rs/0.117.0"),
+        HeaderValue::from_static("codex_cli_rs/0.120.0"),
     );
     incoming.insert("originator", HeaderValue::from_static("codex_cli_rs"));
 
@@ -56,7 +60,7 @@ fn models_headers_forward_incoming_fingerprint_in_passthrough_mode() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some("codex_cli_rs/0.117.0")
+        Some("codex_cli_rs/0.120.0")
     );
     assert_eq!(
         headers
@@ -71,7 +75,7 @@ fn responses_headers_forward_incoming_fingerprint_in_passthrough_mode() {
     let mut incoming = HeaderMap::new();
     incoming.insert(
         "user-agent",
-        HeaderValue::from_static("codex_cli_rs/0.117.0"),
+        HeaderValue::from_static("codex_cli_rs/0.120.0"),
     );
     incoming.insert("originator", HeaderValue::from_static("codex_cli_rs"));
     incoming.insert("session_id", HeaderValue::from_static("abc"));
@@ -82,7 +86,7 @@ fn responses_headers_forward_incoming_fingerprint_in_passthrough_mode() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some("codex_cli_rs/0.117.0")
+        Some("codex_cli_rs/0.120.0")
     );
     assert_eq!(
         headers
@@ -158,11 +162,13 @@ fn unary_headers_do_not_invent_subagent_without_session_source() {
         "responses/compact",
         &HeaderMap::new(),
         FingerprintMode::Normalize,
+        None,
     );
     let memories_headers = build_unary_extra_headers(
         "memories/trace_summarize",
         &HeaderMap::new(),
         FingerprintMode::Normalize,
+        None,
     );
 
     assert!(compact_headers.get("x-openai-subagent").is_none());
@@ -237,8 +243,12 @@ fn compact_headers_forward_responses_identity_headers() {
     );
     incoming.insert("x-openai-subagent", HeaderValue::from_static("compact"));
 
-    let headers =
-        build_unary_extra_headers("responses/compact", &incoming, FingerprintMode::Normalize);
+    let headers = build_unary_extra_headers(
+        "responses/compact",
+        &incoming,
+        FingerprintMode::Normalize,
+        None,
+    );
 
     assert_eq!(
         headers
@@ -267,6 +277,98 @@ fn compact_headers_forward_responses_identity_headers() {
 }
 
 #[test]
+fn stable_installation_id_is_uuid_v5_and_deterministic() {
+    let first = stable_installation_id("acct_123");
+    let second = stable_installation_id("acct_123");
+    let different = stable_installation_id("acct_456");
+
+    assert_eq!(first, second);
+    assert_ne!(first, different);
+    assert!(uuid::Uuid::parse_str(&first).is_ok());
+}
+
+#[test]
+fn responses_body_normalize_injects_installation_id_into_client_metadata() {
+    let mut body = serde_json::json!({
+        "model": "gpt-5.4",
+        "client_metadata": {
+            "existing": "value",
+            X_CODEX_INSTALLATION_ID_HEADER: "old"
+        }
+    });
+
+    apply_responses_installation_id(
+        &mut body,
+        Some("11111111-1111-5111-8111-111111111111"),
+        FingerprintMode::Normalize,
+    );
+
+    assert_eq!(
+        body.pointer("/client_metadata/x-codex-installation-id")
+            .and_then(Value::as_str),
+        Some("11111111-1111-5111-8111-111111111111")
+    );
+    assert_eq!(
+        body.pointer("/client_metadata/existing")
+            .and_then(Value::as_str),
+        Some("value")
+    );
+}
+
+#[test]
+fn compact_headers_normalize_overrides_installation_id() {
+    let mut incoming = HeaderMap::new();
+    incoming.insert(
+        X_CODEX_INSTALLATION_ID_HEADER,
+        HeaderValue::from_static("00000000-0000-5000-8000-000000000000"),
+    );
+
+    let headers = build_unary_extra_headers(
+        "responses/compact",
+        &incoming,
+        FingerprintMode::Normalize,
+        Some("11111111-1111-5111-8111-111111111111"),
+    );
+
+    assert_eq!(
+        headers
+            .get(X_CODEX_INSTALLATION_ID_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("11111111-1111-5111-8111-111111111111")
+    );
+}
+
+#[test]
+fn compact_headers_passthrough_preserves_existing_installation_id_without_synthesizing() {
+    let mut incoming = HeaderMap::new();
+    incoming.insert(
+        X_CODEX_INSTALLATION_ID_HEADER,
+        HeaderValue::from_static("00000000-0000-5000-8000-000000000000"),
+    );
+
+    let passthrough = build_unary_extra_headers(
+        "responses/compact",
+        &incoming,
+        FingerprintMode::Passthrough,
+        Some("11111111-1111-5111-8111-111111111111"),
+    );
+    let synthesized = build_unary_extra_headers(
+        "responses/compact",
+        &HeaderMap::new(),
+        FingerprintMode::Passthrough,
+        Some("11111111-1111-5111-8111-111111111111"),
+    );
+
+    assert_eq!(
+        passthrough
+            .get(X_CODEX_INSTALLATION_ID_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("00000000-0000-5000-8000-000000000000")
+    );
+    assert!(synthesized.get(X_CODEX_INSTALLATION_ID_HEADER).is_none());
+}
+
+#[test]
 fn responses_stream_request_matches_codex_transport_expectations() {
     let mut req = Request {
         method: Method::POST,
@@ -292,7 +394,7 @@ fn responses_stream_request_matches_codex_transport_expectations() {
 #[test]
 fn websocket_headers_include_beta_marker() {
     let headers =
-        build_responses_websocket_headers(&HeaderMap::new(), FingerprintMode::Normalize, "0.117.0");
+        build_responses_websocket_headers(&HeaderMap::new(), FingerprintMode::Normalize, "0.120.0");
 
     assert_eq!(
         headers
@@ -304,7 +406,7 @@ fn websocket_headers_include_beta_marker() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some(build_codex_user_agent("0.117.0").as_str())
+        Some(build_codex_user_agent("0.120.0").as_str())
     );
 }
 
@@ -322,7 +424,7 @@ fn websocket_headers_forward_responses_identity_headers() {
     incoming.insert("x-openai-subagent", HeaderValue::from_static("review"));
 
     let headers =
-        build_responses_websocket_headers(&incoming, FingerprintMode::Normalize, "0.117.0");
+        build_responses_websocket_headers(&incoming, FingerprintMode::Normalize, "0.120.0");
 
     assert_eq!(
         headers
@@ -460,7 +562,7 @@ fn apply_http_request_timeout_sets_timeout() {
 fn upstream_client_uses_request_timeout_for_refresh_and_unary_http_requests() {
     let client = UpstreamClient::new(
         "https://chatgpt.com/backend-api/codex".to_string(),
-        "0.118.0".to_string(),
+        "0.120.0".to_string(),
         FingerprintMode::Normalize,
         321,
     )
@@ -473,7 +575,7 @@ fn upstream_client_uses_request_timeout_for_refresh_and_unary_http_requests() {
 fn upstream_client_does_not_set_total_timeout_for_stream_requests() {
     let client = UpstreamClient::new(
         "https://chatgpt.com/backend-api/codex".to_string(),
-        "0.118.0".to_string(),
+        "0.120.0".to_string(),
         FingerprintMode::Normalize,
         321,
     )

@@ -44,7 +44,7 @@ Run:
 cargo run --release -- \
   --listen 127.0.0.1:18039 \
   --admin-listen 127.0.0.1:18040 \
-  --codex-version 0.118.0 \
+  --codex-version 0.120.0 \
   --routing-policy least_in_flight \
   --fingerprint-mode normalize
 ```
@@ -238,7 +238,8 @@ Current practice:
 
 - prefer Codex Rust crates for transport / login / protocol behavior
 - do not synthesize `x-codex-window-id`
-- do not synthesize identity keys inside websocket `client_metadata`
+- do not synthesize websocket `client_metadata` identity keys that depend on downstream client-local thread state
+- treat `x-codex-installation-id` separately: in `normalize` mode it is derived from the selected upstream account and may be rewritten on websocket replay after pre-commit failover
 - only inject stable Codex fields such as `store: false`
 
 If a compatibility tweak exists only to support some unknown third-party caller, and not because it matches Codex, it should not be added by default.

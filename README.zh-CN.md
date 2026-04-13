@@ -46,7 +46,7 @@
 - 业务口监听：`127.0.0.1:18039`
 - 管理口监听：`127.0.0.1:18040`
 - 账号目录：类 Unix 为 `$HOME/.codaze`，Windows 为 `%USERPROFILE%\\.codaze`
-- Codex 版本：`0.118.0` （指定UA等地方的 Codex 版本号）
+- Codex 版本：`0.120.0` （指定UA等地方的 Codex 版本号）
 - 路由策略：`least_in_flight` （最少并发优先）
 - 指纹模式：`normalize`
 
@@ -56,7 +56,7 @@
 ./codaze \
   --listen 127.0.0.1:18039 \
   --admin-listen 127.0.0.1:18040 \
-  --codex-version 0.118.0 \
+  --codex-version 0.120.0 \
   --routing-policy least_in_flight \
   --fingerprint-mode normalize
 ```
@@ -175,13 +175,16 @@ HTTPS_PROXY="http://127.0.0.1:3128" \
 - 调用方缺失 `instructions` 或显式传 `null` 时补成 `instructions: ""`
 - 按模型推导出的 `parallel_tool_calls`
 - 能从 `x-codex-session-source` 明确推导出来的 identity headers，例如 `x-openai-subagent` 和 `x-codex-parent-thread-id`
+- 基于当前选中的上游 `ChatGPT-Account-ID` 推导出的稳定 `x-codex-installation-id`
 
 `passthrough` 只影响出站请求指纹整形，不会关闭路由、refresh、错误分类或本地管理行为。
 
 一个重要边界：
 
 - 如果调用方本来就提供了 `x-codex-window-id`，`Codaze` 会透传
-- 对非 Codex 调用方，`Codaze` 不会凭空生成 `x-codex-window-id`，也不会凭空生成 websocket `response.create.client_metadata` 里的 identity key
+- 对非 Codex 调用方，`Codaze` 不会凭空生成 `x-codex-window-id`，也不会凭空生成那些依赖客户端本地线程状态的 websocket `response.create.client_metadata` identity key
+- `x-codex-installation-id` 和 `x-codex-window-id` 不一样：`normalize` 模式下，Codaze 会针对 `/v1/responses`、`/v1/responses/compact` 和 websocket `response.create` 按当前选中的上游账号重写它；`passthrough` 模式下则不主动添加，也不覆盖
+- 如果 websocket 请求在 commit 前因为 failover 切到另一个上游账号，Codaze 会用新上游连接对应的 `x-codex-installation-id` 重放 `response.create`
 - `GET /v1/models` 只有在 `originator` 明确是 Codex 客户端时才返回 Codex 形状 `{"models":[...]}`；其他调用方拿到的是 OpenAI 风格 `{"object":"list","data":[...]}`
 - `/v1/responses` 的建流前失败只对 Codex 调用方保持 synthetic SSE；非 Codex 调用方会收到普通 HTTP JSON 错误
 - 对非 Codex 的 `POST /v1/responses`，Codaze 会做一小组兼容归一化：删除少量当前上游明确拒绝的字段，只保留 `service_tier: "priority"`，并把旧的 `web_search_preview*` 别名改成 `web_search`；精确规则见 [docs/API.zh-CN.md](docs/API.zh-CN.md)

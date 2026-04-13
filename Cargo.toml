@@ -1,6 +1,6 @@
 [package]
 name = "codaze"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -10,11 +10,11 @@ anyhow = "1"
 axum = { version = "0.8", features = ["http1", "json", "tokio", "ws"] }
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
-codex-client = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
-codex-login = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
-codex-protocol = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
-codex-terminal-detection = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
-codex-utils-rustls-provider = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
+codex-client = { git = "https://github.com/openai/codex.git", rev = "d626dc38950fb40a1a5ad0a8ffab2485e3348c53" }
+codex-login = { git = "https://github.com/openai/codex.git", rev = "d626dc38950fb40a1a5ad0a8ffab2485e3348c53" }
+codex-protocol = { git = "https://github.com/openai/codex.git", rev = "d626dc38950fb40a1a5ad0a8ffab2485e3348c53" }
+codex-terminal-detection = { git = "https://github.com/openai/codex.git", rev = "d626dc38950fb40a1a5ad0a8ffab2485e3348c53" }
+codex-utils-rustls-provider = { git = "https://github.com/openai/codex.git", rev = "d626dc38950fb40a1a5ad0a8ffab2485e3348c53" }
 futures = "0.3"
 http = "1"
 os_info = "3.12.0"
@@ -29,9 +29,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 url = "2"
+uuid = { version = "1", features = ["v5"] }
 
 [dev-dependencies]
-codex-api = { git = "https://github.com/openai/codex.git", rev = "4fd5c35c4f6f51048f47c8680ed0f6a26c608f68" }
+codex-api = { git = "https://github.com/openai/codex.git", rev = "d626dc38950fb40a1a5ad0a8ffab2485e3348c53" }
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]

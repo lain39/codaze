@@ -21,9 +21,9 @@ pub(crate) use self::websocket::{
     WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE, WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE,
     classify_websocket_error_text, classify_websocket_upstream_message,
     is_responses_websocket_request_start, normalize_rate_limit_event_payload,
-    rewrite_previous_response_not_found_message, rewrite_previous_response_not_found_payload,
-    should_passthrough_retryable_websocket_reset, upstream_message_commits_request,
-    upstream_message_is_terminal,
+    normalize_response_create_installation_id_payload, rewrite_previous_response_not_found_message,
+    rewrite_previous_response_not_found_payload, should_passthrough_retryable_websocket_reset,
+    upstream_message_commits_request, upstream_message_is_terminal,
 };
 pub(crate) use self::websocket::{
     WebsocketProxyOutcome, classify_response_failed_event, proxy_websocket,

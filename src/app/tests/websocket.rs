@@ -1,13 +1,15 @@
 use super::*;
 use crate::classifier::FailureClass;
+use crate::config::FingerprintMode;
 use crate::responses::{
     PendingWebsocketRequest, PendingWebsocketRetryResult, WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE,
     WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE, WebsocketProxyOutcome,
     classify_websocket_error_text, classify_websocket_upstream_message,
     is_responses_websocket_request_start, normalize_rate_limit_event_payload,
-    retry_pending_websocket_request, rewrite_previous_response_not_found_message,
-    rewrite_previous_response_not_found_payload, should_passthrough_retryable_websocket_reset,
-    upstream_message_commits_request, upstream_message_is_terminal,
+    normalize_response_create_installation_id_payload, retry_pending_websocket_request,
+    rewrite_previous_response_not_found_message, rewrite_previous_response_not_found_payload,
+    should_passthrough_retryable_websocket_reset, upstream_message_commits_request,
+    upstream_message_is_terminal,
 };
 use axum::http::HeaderMap;
 use serde_json::Value;
@@ -253,6 +255,84 @@ fn response_create_marks_websocket_request_start() {
     let message =
         TungsteniteMessage::Text(r#"{"type":"response.create","model":"gpt-5.4"}"#.into());
     assert!(is_responses_websocket_request_start(&message));
+}
+
+#[test]
+fn normalize_response_create_installation_id_payload_injects_client_metadata() {
+    let normalized = normalize_response_create_installation_id_payload(
+        r#"{"type":"response.create","model":"gpt-5.4","client_metadata":{"existing":"value","x-codex-installation-id":"old"}}"#,
+        FingerprintMode::Normalize,
+        Some("11111111-1111-5111-8111-111111111111"),
+    )
+    .expect("normalized payload");
+    let json: Value = serde_json::from_str(&normalized).expect("json");
+
+    assert_eq!(
+        json.pointer("/client_metadata/x-codex-installation-id")
+            .and_then(Value::as_str),
+        Some("11111111-1111-5111-8111-111111111111")
+    );
+    assert_eq!(
+        json.pointer("/client_metadata/existing")
+            .and_then(Value::as_str),
+        Some("value")
+    );
+}
+
+#[test]
+fn normalize_response_create_installation_id_payload_is_noop_in_passthrough_mode() {
+    let normalized = normalize_response_create_installation_id_payload(
+        r#"{"type":"response.create","model":"gpt-5.4"}"#,
+        FingerprintMode::Passthrough,
+        Some("11111111-1111-5111-8111-111111111111"),
+    );
+
+    assert!(normalized.is_none());
+}
+
+#[test]
+fn normalize_response_create_installation_id_payload_is_connection_scoped_on_replay() {
+    let original = r#"{"type":"response.create","model":"gpt-5.4","client_metadata":{"x-codex-installation-id":"downstream","existing":"value"}}"#;
+    let first = normalize_response_create_installation_id_payload(
+        original,
+        FingerprintMode::Normalize,
+        Some("aaaaaaaa-aaaa-5aaa-8aaa-aaaaaaaaaaaa"),
+    )
+    .expect("first normalization");
+    let second = normalize_response_create_installation_id_payload(
+        original,
+        FingerprintMode::Normalize,
+        Some("bbbbbbbb-bbbb-5bbb-8bbb-bbbbbbbbbbbb"),
+    )
+    .expect("second normalization");
+
+    let first_json: Value = serde_json::from_str(&first).expect("first json");
+    let second_json: Value = serde_json::from_str(&second).expect("second json");
+
+    assert_eq!(
+        first_json
+            .pointer("/client_metadata/x-codex-installation-id")
+            .and_then(Value::as_str),
+        Some("aaaaaaaa-aaaa-5aaa-8aaa-aaaaaaaaaaaa")
+    );
+    assert_eq!(
+        second_json
+            .pointer("/client_metadata/x-codex-installation-id")
+            .and_then(Value::as_str),
+        Some("bbbbbbbb-bbbb-5bbb-8bbb-bbbbbbbbbbbb")
+    );
+    assert_eq!(
+        first_json
+            .pointer("/client_metadata/existing")
+            .and_then(Value::as_str),
+        Some("value")
+    );
+    assert_eq!(
+        second_json
+            .pointer("/client_metadata/existing")
+            .and_then(Value::as_str),
+        Some("value")
+    );
 }
 
 #[test]

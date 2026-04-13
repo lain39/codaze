@@ -1,5 +1,6 @@
 use super::GatewayAuth;
 use super::client::build_codex_user_agent;
+use super::fingerprint::{X_CODEX_INSTALLATION_ID_HEADER, apply_compact_installation_id_header};
 use crate::config::FingerprintMode;
 use codex_login::default_client::default_headers;
 use codex_protocol::protocol::{SessionSource, SubAgentSource};
@@ -60,6 +61,7 @@ pub(super) fn build_unary_extra_headers(
     path: &str,
     incoming: &HeaderMap,
     mode: FingerprintMode,
+    installation_id: Option<&str>,
 ) -> HeaderMap {
     match path {
         "responses/compact" => {
@@ -67,6 +69,8 @@ pub(super) fn build_unary_extra_headers(
             extend_fingerprint_headers(incoming, &mut headers, mode);
             maybe_extend_conversation_headers(incoming, &mut headers);
             extend_responses_identity_headers(incoming, &mut headers, mode);
+            copy_if_present(incoming, &mut headers, X_CODEX_INSTALLATION_ID_HEADER);
+            apply_compact_installation_id_header(&mut headers, installation_id, mode);
             headers
         }
         "memories/trace_summarize" => {

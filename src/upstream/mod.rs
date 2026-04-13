@@ -1,4 +1,5 @@
 mod client;
+pub(crate) mod fingerprint;
 mod headers;
 mod http;
 mod refresh;
@@ -85,6 +86,7 @@ pub struct UpstreamStreamResponse {
 
 pub struct UpstreamWebsocketConnection {
     pub stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    pub installation_id: Option<String>,
 }
 
 #[derive(Debug)]

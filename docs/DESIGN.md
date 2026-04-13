@@ -133,11 +133,24 @@ Codex websocket `response.create` also carries identity information in `client_m
 - `x-openai-subagent`
 - `x-codex-parent-thread-id`
 - `x-codex-turn-metadata`
+- `x-codex-installation-id`
 
-The rule is the same:
+For fields tied to client-local thread/session state, the rule is the same:
 
 - forward when there is a real source value
 - do not fabricate fields that depend on client-internal session state
+
+`x-codex-installation-id` is the exception. Current Codex sends it as a stable installation marker, and
+Codaze treats it as a selected-upstream-account fingerprint instead of a downstream-thread-state
+field:
+
+- in `normalize` mode, Codaze derives a stable UUID from the selected upstream `ChatGPT-Account-ID`
+- it writes that value to `/v1/responses` `client_metadata`, `/v1/responses/compact` request
+  headers, and websocket `response.create.client_metadata`
+- in `passthrough` mode, Codaze does not synthesize or override the field
+- if websocket pre-commit failover switches to a replacement upstream account, the replayed
+  `response.create` is rewritten with the replacement connection's installation id so each upstream
+  websocket connection sees a self-consistent value
 
 ## 7. Why We Do Not Rebuild the Full Session State Machine
 

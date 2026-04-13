@@ -22,6 +22,22 @@ The format is intentionally simple and human-maintained.
 
 - Nothing yet
 
+## 0.2.2 - 2026-04-13
+
+### Added
+
+- `x-codex-installation-id` fingerprint normalization for `/v1/responses`, `/v1/responses/compact`, and responses websocket `response.create`
+- Documentation covering the account-derived installation-id strategy and websocket pre-commit failover replay behavior
+
+### Changed
+
+- Default Codex fingerprint version updated to `0.120.0`
+- Codex Rust dependencies updated to `d626dc38950fb40a1a5ad0a8ffab2485e3348c53`
+
+### Fixed
+
+- Responses websocket pre-commit failover now rewrites replayed `response.create` messages with the replacement upstream connection's installation id
+
 ## 0.2.1 - 2026-04-07
 
 ### Added

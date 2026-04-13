@@ -1,4 +1,5 @@
 use super::client::retry_policy;
+use super::fingerprint::{apply_responses_installation_id, installation_id_for_account};
 use super::headers::{
     add_auth_headers_to_header_map, build_models_extra_headers, build_responses_extra_headers,
     build_unary_extra_headers, sanitize_response_headers,
@@ -8,8 +9,8 @@ use crate::accounts::UpstreamAccount;
 use anyhow::Context;
 use bytes::Bytes;
 use codex_client::{
-    HttpTransport, Request, RequestCompression, Response, StreamResponse, TransportError,
-    run_with_retry,
+    HttpTransport, Request, RequestBody, RequestCompression, Response, StreamResponse,
+    TransportError, run_with_retry,
 };
 use http::header::ACCEPT;
 use http::{HeaderMap, HeaderValue, Method};
@@ -24,8 +25,13 @@ impl UpstreamClient {
         incoming_headers: &HeaderMap,
         body: Value,
     ) -> Result<UpstreamUnaryResponse, TransportError> {
-        let extra_headers =
-            build_unary_extra_headers(path, incoming_headers, self.fingerprint_mode);
+        let installation_id = installation_id_for_account(account, self.fingerprint_mode);
+        let extra_headers = build_unary_extra_headers(
+            path,
+            incoming_headers,
+            self.fingerprint_mode,
+            installation_id.as_deref(),
+        );
         let response = self
             .execute_with(
                 Method::POST,
@@ -66,8 +72,13 @@ impl UpstreamClient {
         path: &str,
         account: &UpstreamAccount,
         incoming_headers: &HeaderMap,
-        body: Value,
+        mut body: Value,
     ) -> Result<UpstreamStreamResponse, TransportError> {
+        apply_responses_installation_id(
+            &mut body,
+            installation_id_for_account(account, self.fingerprint_mode).as_deref(),
+            self.fingerprint_mode,
+        );
         let extra_headers = build_responses_extra_headers(incoming_headers, self.fingerprint_mode);
         let response = self
             .stream_with(
@@ -166,7 +177,7 @@ fn make_request(
     let mut req = provider.build_request(method.clone(), path);
     req.headers.extend(extra_headers.clone());
     if let Some(body) = body {
-        req.body = Some(body.clone());
+        req.body = Some(RequestBody::Json(body.clone()));
     }
     add_auth_headers(auth, req)
 }

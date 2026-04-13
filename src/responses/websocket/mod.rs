@@ -10,9 +10,9 @@ pub(crate) use errors::{
 #[cfg(test)]
 pub(crate) use protocol::{
     is_responses_websocket_request_start, normalize_rate_limit_event_payload,
-    rewrite_previous_response_not_found_message, rewrite_previous_response_not_found_payload,
-    should_passthrough_retryable_websocket_reset, upstream_message_commits_request,
-    upstream_message_is_terminal,
+    normalize_response_create_installation_id_payload, rewrite_previous_response_not_found_message,
+    rewrite_previous_response_not_found_payload, should_passthrough_retryable_websocket_reset,
+    upstream_message_commits_request, upstream_message_is_terminal,
 };
 
 use self::errors::{
@@ -22,7 +22,7 @@ use self::errors::{
 use self::protocol::{
     is_responses_websocket_request_start as is_responses_websocket_request_start_impl,
     map_client_message_to_upstream, map_upstream_message_to_client,
-    normalize_websocket_rate_limit_message,
+    normalize_response_create_installation_id_message, normalize_websocket_rate_limit_message,
     rewrite_previous_response_not_found_message as rewrite_previous_response_not_found_message_impl,
     should_buffer_upstream_message_before_commit,
     should_passthrough_retryable_websocket_reset as should_passthrough_retryable_websocket_reset_impl,
@@ -224,6 +224,12 @@ pub(crate) async fn proxy_websocket(
                 {
                     pending.request_messages.push(mapped.clone());
                 }
+
+                let mapped = normalize_response_create_installation_id_message(
+                    mapped,
+                    state.config.fingerprint_mode,
+                    upstream_connection.installation_id.as_deref(),
+                );
 
                 if let Err(error) = upstream_connection.stream.send(mapped).await {
                     if sent_close {
@@ -626,8 +632,13 @@ pub(crate) async fn retry_pending_websocket_request(
             mut value,
         } = replacement;
 
-        let replay =
-            replay_buffered_request_messages(&mut value.stream, &pending.request_messages).await;
+        let replay = replay_buffered_request_messages(
+            &mut value.stream,
+            &pending.request_messages,
+            state.config.fingerprint_mode,
+            value.installation_id.as_deref(),
+        )
+        .await;
         match replay {
             Ok(()) => {
                 return PendingWebsocketRetryResult::Switched {
@@ -702,9 +713,16 @@ async fn replay_buffered_request_messages(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     request_messages: &[TungsteniteMessage],
+    mode: crate::config::FingerprintMode,
+    installation_id: Option<&str>,
 ) -> Result<(), tokio_tungstenite::tungstenite::Error> {
     for message in request_messages {
-        upstream_stream.send(message.clone()).await?;
+        let message = normalize_response_create_installation_id_message(
+            message.clone(),
+            mode,
+            installation_id,
+        );
+        upstream_stream.send(message).await?;
     }
     Ok(())
 }

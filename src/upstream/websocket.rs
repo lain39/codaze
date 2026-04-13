@@ -1,3 +1,4 @@
+use super::fingerprint::installation_id_for_account;
 use super::headers::{add_auth_headers_to_header_map, build_responses_websocket_headers};
 use super::{GatewayAuth, UpstreamClient, UpstreamWebsocketConnection};
 use crate::accounts::UpstreamAccount;
@@ -41,7 +42,10 @@ impl UpstreamClient {
                 .await
                 .map_err(|error| map_ws_error(error, &ws_url))?;
 
-        Ok(UpstreamWebsocketConnection { stream })
+        Ok(UpstreamWebsocketConnection {
+            stream,
+            installation_id: installation_id_for_account(account, self.fingerprint_mode),
+        })
     }
 }
 

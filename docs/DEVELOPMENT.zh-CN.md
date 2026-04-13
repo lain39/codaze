@@ -44,7 +44,7 @@ cargo build --release
 cargo run --release -- \
   --listen 127.0.0.1:18039 \
   --admin-listen 127.0.0.1:18040 \
-  --codex-version 0.118.0 \
+  --codex-version 0.120.0 \
   --routing-policy least_in_flight \
   --fingerprint-mode normalize
 ```
@@ -238,7 +238,8 @@ cargo build
 
 - 优先复用 Codex Rust crate 的 transport / login / protocol
 - 不凭空生成 `x-codex-window-id`
-- 不凭空生成 websocket `client_metadata` 里的 identity key
+- 不凭空生成那些依赖下游客户端本地线程状态的 websocket `client_metadata` identity key
+- `x-codex-installation-id` 单独处理：`normalize` 模式下，它按当前选中的上游账号派生；如果 websocket 在 pre-commit 阶段 failover 重放，也允许按新上游连接重写
 - 只补真实 Codex 稳定存在的字段，如 `store: false`
 
 如果某个兼容行为只是为了“兼容旧调用方”而不是为了“贴近 Codex”，默认不应加入。

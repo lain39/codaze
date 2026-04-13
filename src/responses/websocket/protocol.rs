@@ -1,6 +1,8 @@
 use super::errors::{
     WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE, WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE,
 };
+use crate::config::FingerprintMode;
+use crate::upstream::fingerprint::apply_client_metadata_installation_id;
 use axum::extract::ws::{CloseFrame as AxumCloseFrame, Message as AxumWsMessage};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
@@ -29,6 +31,41 @@ pub(crate) fn rewrite_previous_response_not_found_message(
         return TungsteniteMessage::Text(text);
     };
     TungsteniteMessage::Text(rewritten.into())
+}
+
+pub(crate) fn normalize_response_create_installation_id_message(
+    message: TungsteniteMessage,
+    mode: FingerprintMode,
+    installation_id: Option<&str>,
+) -> TungsteniteMessage {
+    let TungsteniteMessage::Text(text) = message else {
+        return message;
+    };
+    let Some(normalized) =
+        normalize_response_create_installation_id_payload(text.as_ref(), mode, installation_id)
+    else {
+        return TungsteniteMessage::Text(text);
+    };
+    TungsteniteMessage::Text(normalized.into())
+}
+
+pub(crate) fn normalize_response_create_installation_id_payload(
+    text: &str,
+    mode: FingerprintMode,
+    installation_id: Option<&str>,
+) -> Option<String> {
+    if mode != FingerprintMode::Normalize {
+        return None;
+    }
+    let installation_id = installation_id?;
+    let mut json = serde_json::from_str::<Value>(text).ok()?;
+    if json.get("type").and_then(Value::as_str) != Some("response.create") {
+        return None;
+    }
+    if !apply_client_metadata_installation_id(&mut json, installation_id) {
+        return None;
+    }
+    serde_json::to_string(&json).ok()
 }
 
 // Intentionally map upstream previous_response_not_found into Codex's

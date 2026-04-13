@@ -88,7 +88,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.lain39.codaze.
   <string>--accounts-dir</string>
   <string>/Users/you/.codaze</string>
   <string>--codex-version</string>
-  <string>0.118.0</string>
+  <string>0.120.0</string>
 </array>
 ```
 

@@ -46,7 +46,7 @@ That starts with the defaults:
 - public listener: `127.0.0.1:18039`
 - admin listener: `127.0.0.1:18040`
 - accounts dir: `$HOME/.codaze` on Unix-like systems, `%USERPROFILE%\\.codaze` on Windows
-- Codex version: `0.118.0` for UA and related client-version fingerprinting
+- Codex version: `0.120.0` for UA and related client-version fingerprinting
 - routing policy: `least_in_flight`
 - fingerprint mode: `normalize`
 
@@ -56,7 +56,7 @@ If you want to override defaults, pass flags explicitly:
 ./codaze \
   --listen 127.0.0.1:18039 \
   --admin-listen 127.0.0.1:18040 \
-  --codex-version 0.118.0 \
+  --codex-version 0.120.0 \
   --routing-policy least_in_flight \
   --fingerprint-mode normalize
 ```
@@ -175,13 +175,16 @@ The default fingerprint mode is `normalize`. It only injects fields that real Co
 - `instructions: ""` when the caller omits `instructions` or sends `null`
 - model-derived `parallel_tool_calls`
 - identity headers derivable from `x-codex-session-source`, such as `x-openai-subagent` and `x-codex-parent-thread-id`
+- a stable `x-codex-installation-id` derived from the selected upstream `ChatGPT-Account-ID`
 
 `passthrough` only affects outbound request fingerprint shaping. It does not disable routing, refresh, error classification, or local admin behavior.
 
 Important boundary:
 
 - if the caller already provides `x-codex-window-id`, Codaze forwards it
-- for non-Codex callers, Codaze does not synthesize `x-codex-window-id` or websocket `response.create.client_metadata` identity keys
+- for non-Codex callers, Codaze does not synthesize `x-codex-window-id` or websocket `response.create.client_metadata` identity keys that depend on client-local thread state
+- `x-codex-installation-id` is handled differently from `x-codex-window-id`: in `normalize` mode Codaze rewrites it from the selected upstream account for `/v1/responses`, `/v1/responses/compact`, and websocket `response.create`; in `passthrough` mode Codaze does not add or override it
+- if a websocket request is retried on a different upstream account before commit, Codaze replays `response.create` with the replacement connection's derived `x-codex-installation-id`
 - `GET /v1/models` returns Codex `{"models":[...]}` only when `originator` identifies a Codex client; other callers receive OpenAI-style `{"object":"list","data":[...]}` metadata
 - `/v1/responses` pre-stream failures stay as synthetic SSE only for Codex callers; non-Codex callers receive ordinary HTTP JSON errors instead
 - on non-Codex `POST /v1/responses`, Codaze applies a small compatibility normalization set: it removes a few currently rejected fields, keeps only `service_tier: "priority"`, and rewrites legacy `web_search_preview*` aliases to `web_search`; see [docs/API.md](docs/API.md) for the exact rules

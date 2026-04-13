@@ -14,12 +14,11 @@ use bytes::Bytes;
 use chrono::{Duration as ChronoDuration, Utc};
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
-use codex_api::sse::responses::process_sse;
+use codex_api::stream_from_fixture;
 use futures::StreamExt;
-use futures::stream;
+use std::io::Write;
 use std::time::Duration;
 use tempfile::tempdir;
-use tokio::sync::mpsc;
 
 fn test_config(accounts_dir: std::path::PathBuf) -> RuntimeConfig {
     RuntimeConfig {
@@ -29,7 +28,7 @@ fn test_config(accounts_dir: std::path::PathBuf) -> RuntimeConfig {
         routing_policy: RoutingPolicy::LeastInFlight,
         fingerprint_mode: FingerprintMode::Normalize,
         upstream_base_url: "https://chatgpt.com/backend-api/codex".to_string(),
-        codex_version: "0.118.0".to_string(),
+        codex_version: "0.120.0".to_string(),
         request_timeout_seconds: 600,
         refresh_skew_seconds: 8,
         accounts_scan_interval_seconds: 15,
@@ -144,9 +143,18 @@ async fn yield_for_settlement() {
 async fn collect_codex_sse_results(
     chunks: Vec<Result<Bytes, codex_client::TransportError>>,
 ) -> Vec<Result<ResponseEvent, ApiError>> {
-    let stream = stream::iter(chunks).boxed();
-    let (tx, mut rx) = mpsc::channel(16);
-    tokio::spawn(process_sse(stream, tx, Duration::from_secs(5), None));
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("fixture.sse");
+    let mut file = std::fs::File::create(&path).expect("create fixture");
+    for chunk in chunks {
+        let chunk = chunk.expect("sse fixture chunk");
+        file.write_all(&chunk).expect("write fixture");
+    }
+    file.flush().expect("flush fixture");
+
+    let mut rx = stream_from_fixture(&path, Duration::from_secs(5))
+        .expect("build codex sse fixture stream")
+        .rx_event;
 
     let mut results = Vec::new();
     while let Some(item) = rx.recv().await {

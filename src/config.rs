@@ -8,7 +8,7 @@ const DEFAULT_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 600;
 const DEFAULT_REFRESH_SKEW_SECONDS: i64 = 8;
 pub const DEFAULT_ACCOUNTS_SCAN_INTERVAL_SECONDS: u64 = 15;
-pub const DEFAULT_CODEX_VERSION: &str = "0.120.0";
+pub const DEFAULT_CODEX_VERSION: &str = "0.121.0";
 pub const DEFAULT_SHUTDOWN_GRACE_PERIOD_SECONDS: u64 = 10;
 const DEFAULT_ACCOUNTS_DIR_NAME: &str = ".codaze";
 

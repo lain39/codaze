@@ -44,7 +44,7 @@ Run:
 cargo run --release -- \
   --listen 127.0.0.1:18039 \
   --admin-listen 127.0.0.1:18040 \
-  --codex-version 0.120.0 \
+  --codex-version 0.121.0 \
   --routing-policy least_in_flight \
   --fingerprint-mode normalize
 ```
@@ -220,7 +220,9 @@ Typical `/v1/responses` flow:
 Behaviors worth remembering:
 
 - in `normalize` mode, request normalization also treats missing or `null` `instructions` as `""`
-- pre-stream failure is not returned as a raw upstream HTTP error to Codex; it is reshaped into synthetic SSE only for Codex callers, while other callers get ordinary HTTP JSON errors
+- route-level failure rendering is selected per endpoint and response shape: `/v1/models` and `/v1/responses/compact` stay in unary JSON, while `/v1/responses` uses endpoint-specific pre-stream failure rendering
+- on `/v1/responses`, Codex callers receive synthetic SSE before the stream starts, while other callers receive ordinary HTTP JSON errors
+- public business endpoints now collapse account-routing failures into gateway-level unavailability; only request-invalid caller errors keep relatively direct downstream semantics
 - `previous_response_not_found` is intentionally converted into a failure path that triggers downstream reset behavior
 - `passthrough` only disables outbound request normalization; it does not bypass routing or account management
 

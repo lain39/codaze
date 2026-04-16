@@ -2,7 +2,11 @@ use super::errors::{
     WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE, WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE,
 };
 use crate::config::FingerprintMode;
-use crate::upstream::fingerprint::apply_client_metadata_installation_id;
+use crate::models::ModelsSnapshot;
+use crate::request_normalization::normalize_responses_request_body;
+use crate::upstream::fingerprint::{
+    apply_client_metadata_installation_id, apply_client_metadata_user_thread_source,
+};
 use axum::extract::ws::{CloseFrame as AxumCloseFrame, Message as AxumWsMessage};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
@@ -11,14 +15,21 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 pub(crate) fn normalize_websocket_rate_limit_message(
     message: TungsteniteMessage,
-) -> TungsteniteMessage {
+    codex_originator: bool,
+) -> Option<TungsteniteMessage> {
     let TungsteniteMessage::Text(text) = message else {
-        return message;
+        return Some(message);
     };
+    if websocket_message_type(text.as_ref()).as_deref() != Some("codex.rate_limits") {
+        return Some(TungsteniteMessage::Text(text));
+    }
+    if !codex_originator {
+        return None;
+    }
     let Some(normalized) = normalize_rate_limit_event_payload(text.as_ref()) else {
-        return TungsteniteMessage::Text(text);
+        return Some(TungsteniteMessage::Text(text));
     };
-    TungsteniteMessage::Text(normalized.into())
+    Some(TungsteniteMessage::Text(normalized.into()))
 }
 
 pub(crate) fn rewrite_previous_response_not_found_message(
@@ -33,39 +44,63 @@ pub(crate) fn rewrite_previous_response_not_found_message(
     TungsteniteMessage::Text(rewritten.into())
 }
 
-pub(crate) fn normalize_response_create_installation_id_message(
+pub(crate) fn normalize_response_create_message(
     message: TungsteniteMessage,
     mode: FingerprintMode,
+    codex_originator: bool,
+    snapshot: Option<&ModelsSnapshot>,
     installation_id: Option<&str>,
 ) -> TungsteniteMessage {
     let TungsteniteMessage::Text(text) = message else {
         return message;
     };
-    let Some(normalized) =
-        normalize_response_create_installation_id_payload(text.as_ref(), mode, installation_id)
-    else {
+    let Some(normalized) = normalize_response_create_payload(
+        text.as_ref(),
+        mode,
+        codex_originator,
+        snapshot,
+        installation_id,
+    ) else {
         return TungsteniteMessage::Text(text);
     };
     TungsteniteMessage::Text(normalized.into())
 }
 
+pub(crate) fn normalize_response_create_payload(
+    text: &str,
+    mode: FingerprintMode,
+    codex_originator: bool,
+    snapshot: Option<&ModelsSnapshot>,
+    installation_id: Option<&str>,
+) -> Option<String> {
+    let mut json = serde_json::from_str::<Value>(text).ok()?;
+    if json.get("type").and_then(Value::as_str) != Some("response.create") {
+        return None;
+    }
+
+    let original = json.clone();
+    normalize_responses_request_body(mode, codex_originator, &mut json, snapshot);
+
+    if mode == FingerprintMode::Normalize {
+        let _ = apply_client_metadata_user_thread_source(&mut json);
+        if let Some(installation_id) = installation_id {
+            let _ = apply_client_metadata_installation_id(&mut json, installation_id);
+        }
+    }
+
+    if json == original {
+        return None;
+    }
+    serde_json::to_string(&json).ok()
+}
+
+#[cfg(test)]
 pub(crate) fn normalize_response_create_installation_id_payload(
     text: &str,
     mode: FingerprintMode,
     installation_id: Option<&str>,
 ) -> Option<String> {
-    if mode != FingerprintMode::Normalize {
-        return None;
-    }
-    let installation_id = installation_id?;
-    let mut json = serde_json::from_str::<Value>(text).ok()?;
-    if json.get("type").and_then(Value::as_str) != Some("response.create") {
-        return None;
-    }
-    if !apply_client_metadata_installation_id(&mut json, installation_id) {
-        return None;
-    }
-    serde_json::to_string(&json).ok()
+    normalize_response_create_payload(text, mode, true, None, installation_id)
 }
 
 // Intentionally map upstream previous_response_not_found into Codex's
@@ -198,12 +233,9 @@ pub(super) fn map_client_message_to_upstream(message: AxumWsMessage) -> Option<T
         AxumWsMessage::Binary(bytes) => Some(TungsteniteMessage::Binary(bytes)),
         AxumWsMessage::Ping(bytes) => Some(TungsteniteMessage::Ping(bytes)),
         AxumWsMessage::Pong(bytes) => Some(TungsteniteMessage::Pong(bytes)),
-        AxumWsMessage::Close(frame) => Some(TungsteniteMessage::Close(frame.map(|frame| {
-            TungsteniteCloseFrame {
-                code: CloseCode::from(frame.code),
-                reason: frame.reason.to_string().into(),
-            }
-        }))),
+        AxumWsMessage::Close(frame) => Some(TungsteniteMessage::Close(
+            frame.and_then(sanitize_client_close_frame_for_upstream),
+        )),
     }
 }
 
@@ -213,12 +245,96 @@ pub(super) fn map_upstream_message_to_client(message: TungsteniteMessage) -> Opt
         TungsteniteMessage::Binary(bytes) => Some(AxumWsMessage::Binary(bytes)),
         TungsteniteMessage::Ping(bytes) => Some(AxumWsMessage::Ping(bytes)),
         TungsteniteMessage::Pong(bytes) => Some(AxumWsMessage::Pong(bytes)),
-        TungsteniteMessage::Close(frame) => {
-            Some(AxumWsMessage::Close(frame.map(|frame| AxumCloseFrame {
-                code: u16::from(frame.code),
-                reason: frame.reason.to_string().into(),
-            })))
-        }
+        TungsteniteMessage::Close(frame) => Some(AxumWsMessage::Close(
+            frame.and_then(sanitize_upstream_close_frame_for_client),
+        )),
         TungsteniteMessage::Frame(_) => None,
+    }
+}
+
+fn sanitize_client_close_frame_for_upstream(
+    frame: AxumCloseFrame,
+) -> Option<TungsteniteCloseFrame> {
+    let code = CloseCode::from(frame.code);
+    is_wire_legal_close_code(code).then(|| TungsteniteCloseFrame {
+        code,
+        reason: frame.reason.to_string().into(),
+    })
+}
+
+fn sanitize_upstream_close_frame_for_client(
+    frame: TungsteniteCloseFrame,
+) -> Option<AxumCloseFrame> {
+    is_wire_legal_close_code(frame.code).then(|| AxumCloseFrame {
+        code: u16::from(frame.code),
+        reason: frame.reason.to_string().into(),
+    })
+}
+
+fn is_wire_legal_close_code(code: CloseCode) -> bool {
+    !matches!(
+        code,
+        CloseCode::Status
+            | CloseCode::Abnormal
+            | CloseCode::Tls
+            | CloseCode::Reserved(_)
+            | CloseCode::Bad(_)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_client_close_drops_illegal_wire_code() {
+        let message = AxumWsMessage::Close(Some(AxumCloseFrame {
+            code: 1006,
+            reason: "".into(),
+        }));
+
+        let Some(TungsteniteMessage::Close(frame)) = map_client_message_to_upstream(message) else {
+            panic!("expected close frame");
+        };
+        assert!(frame.is_none());
+    }
+
+    #[test]
+    fn map_client_close_drops_bad_wire_code() {
+        let message = AxumWsMessage::Close(Some(AxumCloseFrame {
+            code: 1004,
+            reason: "".into(),
+        }));
+
+        let Some(TungsteniteMessage::Close(frame)) = map_client_message_to_upstream(message) else {
+            panic!("expected close frame");
+        };
+        assert!(frame.is_none());
+    }
+
+    #[test]
+    fn map_upstream_close_drops_illegal_wire_code() {
+        let message = TungsteniteMessage::Close(Some(TungsteniteCloseFrame {
+            code: CloseCode::Abnormal,
+            reason: "".into(),
+        }));
+
+        let Some(AxumWsMessage::Close(frame)) = map_upstream_message_to_client(message) else {
+            panic!("expected close frame");
+        };
+        assert!(frame.is_none());
+    }
+
+    #[test]
+    fn map_upstream_close_drops_reserved_wire_code() {
+        let message = TungsteniteMessage::Close(Some(TungsteniteCloseFrame {
+            code: CloseCode::Reserved(1016),
+            reason: "".into(),
+        }));
+
+        let Some(AxumWsMessage::Close(frame)) = map_upstream_message_to_client(message) else {
+            panic!("expected close frame");
+        };
+        assert!(frame.is_none());
     }
 }

@@ -22,6 +22,27 @@ The format is intentionally simple and human-maintained.
 
 - Nothing yet
 
+## 0.3.0 - 2026-04-16
+
+### Added
+
+- OpenAI-oriented response shaping for non-Codex callers across `/v1/models`, `/v1/responses`, and `/v1/responses/compact`, including route-specific tests and expanded API/design documentation
+- Compatibility normalization for non-Codex request bodies on `/v1/responses` and `/v1/responses/compact`, including top-level string `input` support and legacy web-search alias rewriting on the `/v1/responses` path
+- `thread_source: "user"` normalization in Codex turn metadata for normalized request headers and websocket `response.create.client_metadata`
+
+### Changed
+
+- Default Codex fingerprint version updated to `0.121.0`
+- Codex Rust dependencies updated to `224dad41ac1bdf0c8a848b1fd0068262f1f99223`
+- Public non-Codex HTTP responses now preserve only `Content-Type` and `Cache-Control` while keeping Codex callers on the existing Codex-shaped surface
+- Public routing failures are now collapsed into gateway-level unavailable semantics and no longer expose upstream `retry-after`, `resets_at`, or `resets_in_seconds`
+- Non-Codex `/v1/responses/compact` responses now rewrite `type: "compaction_summary"` to `type: "compaction"` before returning downstream
+
+### Fixed
+
+- Responses websocket and SSE failure rendering now better matches the selected caller shape, including OpenAI-style downstream error events for non-Codex streaming callers
+- `cargo deny check` is clean again after updating `rustls-webpki` to `0.103.12`
+
 ## 0.2.2 - 2026-04-13
 
 ### Added
@@ -31,8 +52,8 @@ The format is intentionally simple and human-maintained.
 
 ### Changed
 
-- Default Codex fingerprint version updated to `0.120.0`
-- Codex Rust dependencies updated to `d626dc38950fb40a1a5ad0a8ffab2485e3348c53`
+- Default Codex fingerprint version updated to `0.121.0`
+- Codex Rust dependencies updated to `224dad41ac1bdf0c8a848b1fd0068262f1f99223`
 
 ### Fixed
 

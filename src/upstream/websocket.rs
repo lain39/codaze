@@ -37,14 +37,25 @@ impl UpstreamClient {
             .map_err(|error| TransportError::Build(error.to_string()))?
             .map(tokio_tungstenite::Connector::Rustls);
 
-        let (stream, _response) =
-            connect_async_tls_with_config(request, Some(websocket_config()), false, connector)
+        let connect =
+            connect_async_tls_with_config(request, Some(websocket_config()), false, connector);
+        let (stream, _response) = match self.websocket_connect_timeout {
+            Some(timeout_duration) => tokio::time::timeout(timeout_duration, connect)
                 .await
-                .map_err(|error| map_ws_error(error, &ws_url))?;
+                .map_err(|_| TransportError::Timeout)?,
+            None => connect.await,
+        }
+        .map_err(|error| map_ws_error(error, &ws_url))?;
+        let turn_state = _response
+            .headers()
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
 
         Ok(UpstreamWebsocketConnection {
             stream,
             installation_id: installation_id_for_account(account, self.fingerprint_mode),
+            turn_state,
         })
     }
 }

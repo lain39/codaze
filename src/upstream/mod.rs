@@ -64,12 +64,15 @@ struct RetryConfig {
 
 pub struct UpstreamClient {
     provider: Provider,
-    transport: ReqwestTransport,
+    codex_transport: ReqwestTransport,
+    passthrough_transport: ReqwestTransport,
     refresh_client: Client,
     codex_version: String,
     fingerprint_mode: FingerprintMode,
     unary_request_timeout: Option<Duration>,
     stream_request_timeout: Option<Duration>,
+    stream_connect_timeout: Option<Duration>,
+    websocket_connect_timeout: Option<Duration>,
 }
 
 pub struct UpstreamUnaryResponse {
@@ -87,6 +90,7 @@ pub struct UpstreamStreamResponse {
 pub struct UpstreamWebsocketConnection {
     pub stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     pub installation_id: Option<String>,
+    pub turn_state: Option<String>,
 }
 
 #[derive(Debug)]

@@ -46,7 +46,7 @@
 - 业务口监听：`127.0.0.1:18039`
 - 管理口监听：`127.0.0.1:18040`
 - 账号目录：类 Unix 为 `$HOME/.codaze`，Windows 为 `%USERPROFILE%\\.codaze`
-- Codex 版本：`0.120.0` （指定UA等地方的 Codex 版本号）
+- Codex 版本：`0.121.0` （指定UA等地方的 Codex 版本号）
 - 路由策略：`least_in_flight` （最少并发优先）
 - 指纹模式：`normalize`
 
@@ -56,7 +56,7 @@
 ./codaze \
   --listen 127.0.0.1:18039 \
   --admin-listen 127.0.0.1:18040 \
-  --codex-version 0.120.0 \
+  --codex-version 0.121.0 \
   --routing-policy least_in_flight \
   --fingerprint-mode normalize
 ```
@@ -185,8 +185,11 @@ HTTPS_PROXY="http://127.0.0.1:3128" \
 - 对非 Codex 调用方，`Codaze` 不会凭空生成 `x-codex-window-id`，也不会凭空生成那些依赖客户端本地线程状态的 websocket `response.create.client_metadata` identity key
 - `x-codex-installation-id` 和 `x-codex-window-id` 不一样：`normalize` 模式下，Codaze 会针对 `/v1/responses`、`/v1/responses/compact` 和 websocket `response.create` 按当前选中的上游账号重写它；`passthrough` 模式下则不主动添加，也不覆盖
 - 如果 websocket 请求在 commit 前因为 failover 切到另一个上游账号，Codaze 会用新上游连接对应的 `x-codex-installation-id` 重放 `response.create`
-- `GET /v1/models` 只有在 `originator` 明确是 Codex 客户端时才返回 Codex 形状 `{"models":[...]}`；其他调用方拿到的是 OpenAI 风格 `{"object":"list","data":[...]}`
-- `/v1/responses` 的建流前失败只对 Codex 调用方保持 synthetic SSE；非 Codex 调用方会收到普通 HTTP JSON 错误
+- `GET /v1/models` 的成功和失败都按 `originator` 选中的 response shape 返回：Codex 调用方成功时拿到 `{"models":[...]}`，失败时走网关自己的结构化错误；其他调用方成功时拿到 OpenAI 风格 `{"object":"list","data":[...]}`，失败时拿到 OpenAI JSON 错误形状
+- `/v1/responses` 的建流前失败规则是这个接口自身的一部分：Codex 调用方收到 synthetic SSE，非 Codex 调用方收到普通 HTTP JSON 错误
+- `/v1/responses/compact` 成功和失败都始终走 unary JSON，不使用 SSE 错误包装
+- 公开业务接口会把账号路由相关失败统一收口成网关级不可用语义，错误码固定为 `server_is_overloaded`，不会暴露上游 `retry-after` 或 `resets_*`
+- 对非 Codex 的 HTTP 响应，Codaze 会做贴近 OpenAI API 的响应整形，但不是逐字节镜像；当前只保留 `Content-Type` 和 `Cache-Control` 两个响应头
 - 对非 Codex 的 `POST /v1/responses`，Codaze 会做一小组兼容归一化：删除少量当前上游明确拒绝的字段，只保留 `service_tier: "priority"`，并把旧的 `web_search_preview*` 别名改成 `web_search`；精确规则见 [docs/API.zh-CN.md](docs/API.zh-CN.md)
 
 完整设计取舍见 [docs/DESIGN.zh-CN.md](docs/DESIGN.zh-CN.md)。

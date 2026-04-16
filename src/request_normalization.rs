@@ -18,6 +18,7 @@ pub(crate) fn normalize_responses_request_body(
     if let Some(object) = body.as_object_mut() {
         if !codex_originator {
             normalize_non_codex_responses_compatibility(object);
+            normalize_string_input_to_message(object);
         }
         if mode != FingerprintMode::Normalize {
             return;
@@ -38,9 +39,16 @@ pub(crate) fn normalize_responses_request_body(
 
 pub(crate) fn normalize_compact_request_body(
     mode: FingerprintMode,
+    codex_originator: bool,
     body: &mut Value,
     snapshot: Option<&ModelsSnapshot>,
 ) {
+    if let Some(object) = body.as_object_mut()
+        && !codex_originator
+    {
+        normalize_string_input_to_message(object);
+    }
+
     if mode != FingerprintMode::Normalize {
         return;
     }
@@ -67,6 +75,31 @@ fn normalize_instructions_field(object: &mut serde_json::Map<String, Value>) {
             object.insert("instructions".to_string(), Value::String(String::new()));
         }
     }
+}
+
+fn normalize_string_input_to_message(object: &mut Map<String, Value>) {
+    let Some(text) = object
+        .get("input")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return;
+    };
+
+    object.insert(
+        "input".to_string(),
+        Value::Array(vec![Value::Object(Map::from_iter([
+            ("type".to_string(), Value::String("message".to_string())),
+            ("role".to_string(), Value::String("user".to_string())),
+            (
+                "content".to_string(),
+                Value::Array(vec![Value::Object(Map::from_iter([
+                    ("type".to_string(), Value::String("input_text".to_string())),
+                    ("text".to_string(), Value::String(text)),
+                ]))]),
+            ),
+        ]))]),
+    );
 }
 
 fn normalize_non_codex_responses_compatibility(object: &mut Map<String, Value>) {

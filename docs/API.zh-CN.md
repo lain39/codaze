@@ -19,6 +19,11 @@
 
 ## 业务接口
 
+通用说明：
+
+- 当 `originator` 不是 Codex 时，Codaze 会把公开 HTTP 响应整形成更贴近 OpenAI API 的表面语义，但这不是对官方 OpenAI API 的逐字节镜像
+- 在这条非 Codex HTTP 路径上，当前只保留下游响应头里的 `Content-Type` 和 `Cache-Control`
+
 ### `GET /health`
 
 用途：
@@ -97,10 +102,13 @@ Codex 调用方的响应样例：
 }
 ```
 
+这里只展示最小骨架；真实返回是完整的 Codex models snapshot，每个 model 对象里的字段会明显更多。
+
 说明：
 
 - `originator` 明确是 Codex 时返回 Codex 形状
 - 其他调用方返回 OpenAI 兼容的 `object/data` 形状
+- Codex 调用方失败时走网关自己的结构化错误；非 Codex 调用方失败时走普通 OpenAI JSON 错误形状
 - 网关会缓存一份上游 Codex models 快照，并用它推导默认的 `parallel_tool_calls`
 
 ### `POST /v1/responses`
@@ -108,8 +116,8 @@ Codex 调用方的响应样例：
 用途：
 
 - 主业务接口
-- 返回 `text/event-stream`
-- 在 HTTP 路径下对下游表现为 Codex 风格的 Responses SSE
+- 流式请求时返回 `text/event-stream`
+- 对 Codex 调用方保留 Codex 风格的 Responses SSE；对非 Codex 调用方则整形成更贴近 OpenAI API 的表面语义
 
 请求样例：
 
@@ -137,6 +145,7 @@ curl -N http://127.0.0.1:18039/v1/responses \
   - `instructions` 缺失或为 `null` 时补成 `""`
   - 按模型推导的 `parallel_tool_calls`
 - 请求体里允许带一个私有 `_gateway` 对象；它只在本地消费，转发前会被剥离
+- 对非 Codex 调用方，顶层字符串形式的 `input` 也会被接受，并归一化成只包含一个 `input_text` item 的单条 user message
 - 对非 Codex 调用方，建议显式携带 `"stream": true`；当前这条上游路径缺失该字段时，常见返回是 `400 {"detail":"Stream must be set to true"}`
 
 #### 非 Codex 调用方兼容归一化
@@ -203,7 +212,7 @@ Codex 调用方的建流前失败样例：
 
 ```text
 event: response.failed
-data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_123","object":"response","created_at":1770000000,"status":"failed","background":false,"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5.4. Please try again in 11.5s."}}}
+data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_123","object":"response","created_at":1770000000,"status":"failed","background":false,"error":{"code":"server_is_overloaded","message":"No account available right now. Try again later."}}}
 ```
 
 非 Codex 调用方的建流前失败样例：
@@ -211,17 +220,28 @@ data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_123",
 ```json
 {
   "error": {
-    "message": "Rate limit reached for gpt-5.4. Please try again in 11s.",
-    "code": "rate_limit_exceeded"
+    "message": "No account available right now. Try again later.",
+    "type": "server_error",
+    "param": null,
+    "code": "server_is_overloaded"
   }
 }
 ```
 
+非 Codex 调用方的建流后网关合成错误样例：
+
+```text
+event: error
+data: {"type":"error","code":"server_is_overloaded","message":"No account available right now. Try again later.","sequence_number":3}
+```
+
 说明：
 
-- `/v1/responses` 的建流前失败只对 Codex 调用方包装成 synthetic SSE
-- 非 Codex 调用方会直接收到普通 HTTP JSON 错误
-- 这样 Codex 仍能走它已支持的 Responses 错误解析链，而其他客户端不用处理 Codex 专用的 SSE 失败面
+- `/v1/responses` 的建流前失败规则取决于 response shape，本身就是这个接口语义的一部分
+- Codex 调用方收到 synthetic SSE，从而继续走现有的 Responses 流式错误处理链
+- 非 Codex 调用方直接收到普通 HTTP JSON 错误，不需要处理 Codex 专用的 SSE 失败面
+- 对非 Codex 调用方，如果流已经建立、后续又由网关合成或改写失败事件，下游拿到的是 OpenAI 风格的 `event: error`，而不是 `event: response.failed`
+- 账号路由相关失败会统一收口成网关级不可用，不再对公网业务接口暴露上游 `retry-after`、`resets_at`、`resets_in_seconds`
 
 ### `GET /v1/responses` websocket
 
@@ -327,21 +347,14 @@ curl -sS http://127.0.0.1:18039/v1/responses/compact \
 ```json
 {
   "id": "resp_123",
-  "object": "response",
+  "object": "response.compaction",
   "created_at": 1770000000,
   "status": "completed",
   "model": "gpt-5.4",
   "output": [
     {
-      "id": "msg_123",
-      "type": "message",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "output_text",
-          "text": "OK"
-        }
-      ]
+      "type": "compaction",
+      "encrypted_content": "base64-or-ciphertext-placeholder"
     }
   ]
 }
@@ -350,6 +363,10 @@ curl -sS http://127.0.0.1:18039/v1/responses/compact \
 说明：
 
 - 这是普通 JSON 接口，不是 SSE
+- 无论成功还是失败都保持 unary JSON，不存在 synthetic SSE 的失败路径
+- 对非 Codex 调用方，顶层字符串形式的 `input` 也会被接受，并归一化成只包含一个 `input_text` item 的单条 user message
+- 对非 Codex 调用方，下游返回前会把输出项里的 `type: "compaction_summary"` 改写成 `type: "compaction"`
+- 对非 Codex 调用方，这条路径上的 HTTP 响应同样只保留 `Content-Type` 和 `Cache-Control` 两个响应头
 - 当前实现不会像 `/v1/responses` 那样为它发明 `store`
 - `parallel_tool_calls` 只会在 `normalize` 模式下按模型规则补齐
 
@@ -771,17 +788,17 @@ curl -sS -X PUT http://127.0.0.1:18040/admin/routing/policy \
 
 ### 上游 refresh 失败
 
-如果失败发生在 refresh 阶段，而且不是 `/v1/responses` 的 SSE 建流前失败包装场景，通常会把上游 JSON 错误直接回给调用方。
+如果 refresh 失败是经由公开业务接口暴露出来的，它通常也会被收口成与其他账号路由失败一致的网关级不可用错误，而不是直接把上游 refresh JSON 透给调用方。
 
 样例：
 
 ```json
 {
   "error": {
-    "message": "Could not validate your refresh token. Please try signing in again.",
-    "type": "invalid_request_error",
+    "message": "No account available right now. Try again later.",
+    "type": "server_error",
     "param": null,
-    "code": "refresh_token_expired"
+    "code": "server_is_overloaded"
   }
 }
 ```

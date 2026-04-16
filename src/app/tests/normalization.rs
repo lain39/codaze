@@ -187,6 +187,51 @@ fn extract_retry_after_falls_back_to_http_body_resets_at() {
 }
 
 #[test]
+fn extract_retry_after_falls_back_to_message_retry_after() {
+    let error = codex_client::TransportError::Http {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        url: None,
+        headers: None,
+        body: Some(
+            r#"{"error":{"message":"Rate limit reached for gpt-5.4. Please try again in 11.5s.","code":"rate_limit_exceeded"}}"#
+                .to_string(),
+        ),
+    };
+
+    let retry_after = extract_retry_after(&error).expect("retry after");
+    assert_eq!(retry_after.as_millis(), 11_500);
+}
+
+#[test]
+fn extract_retry_after_falls_back_to_plain_text_message_retry_after() {
+    let error = codex_client::TransportError::Http {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        url: None,
+        headers: None,
+        body: Some("Rate limit reached for gpt-5.4. Please try again in 8s.".to_string()),
+    };
+
+    let retry_after = extract_retry_after(&error).expect("retry after");
+    assert_eq!(retry_after.as_secs(), 8);
+}
+
+#[test]
+fn extract_retry_after_supports_milliseconds_in_message() {
+    let error = codex_client::TransportError::Http {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        url: None,
+        headers: None,
+        body: Some(
+            r#"{"error":{"message":"Rate limit reached for gpt-5.4. Please try again in 500 milliseconds.","code":"rate_limit_exceeded"}}"#
+                .to_string(),
+        ),
+    };
+
+    let retry_after = extract_retry_after(&error).expect("retry after");
+    assert_eq!(retry_after, Duration::from_millis(500));
+}
+
+#[test]
 fn normalize_responses_defaults_add_store_and_parallel_tool_calls() {
     let mut body = json!({
         "model": "gpt-5.4"
@@ -417,7 +462,7 @@ fn normalize_compact_defaults_parallel_tool_calls_from_models_snapshot() {
     });
 
     let snapshot = test_models_snapshot();
-    normalize_compact_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
+    normalize_compact_request_body(FingerprintMode::Normalize, true, &mut body, Some(&snapshot));
 
     assert_eq!(body["instructions"], Value::String(String::new()));
     assert_eq!(body["parallel_tool_calls"], Value::Bool(false));
@@ -432,7 +477,7 @@ fn normalize_compact_null_instructions_becomes_empty_string() {
     });
 
     let snapshot = test_models_snapshot();
-    normalize_compact_request_body(FingerprintMode::Normalize, &mut body, Some(&snapshot));
+    normalize_compact_request_body(FingerprintMode::Normalize, true, &mut body, Some(&snapshot));
 
     assert_eq!(body["instructions"], Value::String(String::new()));
 }
@@ -452,7 +497,7 @@ fn passthrough_does_not_inject_defaults() {
         &mut responses_body,
         None,
     );
-    normalize_compact_request_body(FingerprintMode::Passthrough, &mut compact_body, None);
+    normalize_compact_request_body(FingerprintMode::Passthrough, true, &mut compact_body, None);
 
     assert!(responses_body.get("store").is_none());
     assert!(responses_body.get("parallel_tool_calls").is_none());
@@ -490,7 +535,91 @@ fn unknown_models_default_parallel_tool_calls_to_true() {
         "model": "future-model"
     });
 
-    normalize_compact_request_body(FingerprintMode::Normalize, &mut body, None);
+    normalize_compact_request_body(FingerprintMode::Normalize, true, &mut body, None);
 
     assert_eq!(body["parallel_tool_calls"], Value::Bool(true));
+}
+
+#[test]
+fn normalize_responses_non_codex_string_input_becomes_user_message() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "input": "hi"
+    });
+
+    normalize_responses_request_body(FingerprintMode::Normalize, false, &mut body, None);
+
+    assert_eq!(
+        body.pointer("/input/0/type").and_then(Value::as_str),
+        Some("message")
+    );
+    assert_eq!(
+        body.pointer("/input/0/role").and_then(Value::as_str),
+        Some("user")
+    );
+    assert_eq!(
+        body.pointer("/input/0/content/0/type")
+            .and_then(Value::as_str),
+        Some("input_text")
+    );
+    assert_eq!(
+        body.pointer("/input/0/content/0/text")
+            .and_then(Value::as_str),
+        Some("hi")
+    );
+}
+
+#[test]
+fn normalize_responses_codex_string_input_is_unchanged() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "input": "hi"
+    });
+
+    normalize_responses_request_body(FingerprintMode::Normalize, true, &mut body, None);
+
+    assert_eq!(body["input"], Value::String("hi".to_string()));
+}
+
+#[test]
+fn normalize_compact_non_codex_string_input_becomes_user_message_even_in_passthrough() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "input": "hi"
+    });
+
+    normalize_compact_request_body(FingerprintMode::Passthrough, false, &mut body, None);
+
+    assert_eq!(
+        body.pointer("/input/0/type").and_then(Value::as_str),
+        Some("message")
+    );
+    assert_eq!(
+        body.pointer("/input/0/role").and_then(Value::as_str),
+        Some("user")
+    );
+    assert_eq!(
+        body.pointer("/input/0/content/0/type")
+            .and_then(Value::as_str),
+        Some("input_text")
+    );
+    assert_eq!(
+        body.pointer("/input/0/content/0/text")
+            .and_then(Value::as_str),
+        Some("hi")
+    );
+    assert!(body.get("instructions").is_none());
+    assert!(body.get("parallel_tool_calls").is_none());
+}
+
+#[test]
+fn normalize_compact_codex_string_input_is_unchanged() {
+    let mut body = json!({
+        "model": "gpt-5.4",
+        "input": "hi"
+    });
+
+    normalize_compact_request_body(FingerprintMode::Normalize, true, &mut body, None);
+
+    assert_eq!(body["input"], Value::String("hi".to_string()));
 }

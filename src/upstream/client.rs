@@ -24,6 +24,8 @@ impl UpstreamClient {
     ) -> anyhow::Result<Self> {
         let client = try_build_codex_reqwest_client(&codex_version)
             .context("build Codex-aligned reqwest client")?;
+        let passthrough_client =
+            try_build_passthrough_reqwest_client().context("build passthrough reqwest client")?;
         Ok(Self {
             provider: Provider {
                 base_url: base_url.trim_end_matches('/').to_string(),
@@ -36,12 +38,15 @@ impl UpstreamClient {
                     retry_transport: true,
                 },
             },
-            transport: codex_client::ReqwestTransport::new(client.clone()),
+            codex_transport: codex_client::ReqwestTransport::new(client.clone()),
+            passthrough_transport: codex_client::ReqwestTransport::new(passthrough_client),
             refresh_client: client,
             codex_version,
             fingerprint_mode,
             unary_request_timeout: Some(Duration::from_secs(request_timeout_seconds)),
             stream_request_timeout: None,
+            stream_connect_timeout: Some(Duration::from_secs(request_timeout_seconds)),
+            websocket_connect_timeout: Some(Duration::from_secs(request_timeout_seconds)),
         })
     }
 }
@@ -54,6 +59,15 @@ pub(super) fn try_build_codex_reqwest_client(
     let mut builder = reqwest::Client::builder()
         .user_agent(ua)
         .default_headers(default_headers());
+    if is_sandboxed() {
+        builder = builder.no_proxy();
+    }
+    build_reqwest_client_with_custom_ca(builder)
+}
+
+fn try_build_passthrough_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
+    ensure_rustls_crypto_provider();
+    let mut builder = reqwest::Client::builder();
     if is_sandboxed() {
         builder = builder.no_proxy();
     }

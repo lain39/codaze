@@ -69,6 +69,7 @@ impl ModelsSnapshot {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ModelsCache {
     snapshot: Option<Arc<ModelsSnapshot>>,
+    response_headers: HeaderMap,
     fetched_at: Option<Instant>,
 }
 
@@ -77,37 +78,48 @@ impl ModelsCache {
         self.snapshot.clone()
     }
 
-    pub(crate) fn fresh(&self) -> Option<Arc<ModelsSnapshot>> {
+    pub(crate) fn current_entry(&self) -> Option<(Arc<ModelsSnapshot>, HeaderMap)> {
+        Some((self.snapshot.clone()?, self.response_headers.clone()))
+    }
+
+    pub(crate) fn fresh_entry(&self) -> Option<(Arc<ModelsSnapshot>, HeaderMap)> {
         let fetched_at = self.fetched_at?;
         if fetched_at.elapsed() <= MODELS_CACHE_TTL {
-            return self.snapshot.clone();
+            return self.current_entry();
         }
         None
     }
 
-    pub(crate) fn replace(&mut self, snapshot: Arc<ModelsSnapshot>) {
+    pub(crate) fn replace(&mut self, snapshot: Arc<ModelsSnapshot>, response_headers: HeaderMap) {
         self.snapshot = Some(snapshot);
+        self.response_headers = response_headers;
         self.fetched_at = Some(Instant::now());
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ModelsResponseShape {
+pub(crate) enum ResponseShape {
     Codex,
     OpenAi,
 }
 
-pub(crate) fn response_shape_for_headers(headers: &HeaderMap) -> ModelsResponseShape {
+impl ResponseShape {
+    pub(crate) fn is_codex(self) -> bool {
+        matches!(self, Self::Codex)
+    }
+}
+
+pub(crate) fn response_shape_for_headers(headers: &HeaderMap) -> ResponseShape {
     let Some(originator) = headers
         .get("originator")
         .and_then(|value| value.to_str().ok())
     else {
-        return ModelsResponseShape::OpenAi;
+        return ResponseShape::OpenAi;
     };
     if originator.starts_with("codex") {
-        ModelsResponseShape::Codex
+        ResponseShape::Codex
     } else {
-        ModelsResponseShape::OpenAi
+        ResponseShape::OpenAi
     }
 }
 
@@ -132,17 +144,14 @@ mod tests {
     fn codex_originator_uses_codex_shape() {
         let mut headers = HeaderMap::new();
         headers.insert("originator", "codex-tui".parse().unwrap());
-        assert_eq!(
-            response_shape_for_headers(&headers),
-            ModelsResponseShape::Codex
-        );
+        assert_eq!(response_shape_for_headers(&headers), ResponseShape::Codex);
     }
 
     #[test]
     fn missing_originator_uses_openai_shape() {
         assert_eq!(
             response_shape_for_headers(&HeaderMap::new()),
-            ModelsResponseShape::OpenAi
+            ResponseShape::OpenAi
         );
     }
 

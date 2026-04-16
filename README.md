@@ -46,7 +46,7 @@ That starts with the defaults:
 - public listener: `127.0.0.1:18039`
 - admin listener: `127.0.0.1:18040`
 - accounts dir: `$HOME/.codaze` on Unix-like systems, `%USERPROFILE%\\.codaze` on Windows
-- Codex version: `0.120.0` for UA and related client-version fingerprinting
+- Codex version: `0.121.0` for UA and related client-version fingerprinting
 - routing policy: `least_in_flight`
 - fingerprint mode: `normalize`
 
@@ -56,7 +56,7 @@ If you want to override defaults, pass flags explicitly:
 ./codaze \
   --listen 127.0.0.1:18039 \
   --admin-listen 127.0.0.1:18040 \
-  --codex-version 0.120.0 \
+  --codex-version 0.121.0 \
   --routing-policy least_in_flight \
   --fingerprint-mode normalize
 ```
@@ -185,8 +185,11 @@ Important boundary:
 - for non-Codex callers, Codaze does not synthesize `x-codex-window-id` or websocket `response.create.client_metadata` identity keys that depend on client-local thread state
 - `x-codex-installation-id` is handled differently from `x-codex-window-id`: in `normalize` mode Codaze rewrites it from the selected upstream account for `/v1/responses`, `/v1/responses/compact`, and websocket `response.create`; in `passthrough` mode Codaze does not add or override it
 - if a websocket request is retried on a different upstream account before commit, Codaze replays `response.create` with the replacement connection's derived `x-codex-installation-id`
-- `GET /v1/models` returns Codex `{"models":[...]}` only when `originator` identifies a Codex client; other callers receive OpenAI-style `{"object":"list","data":[...]}` metadata
-- `/v1/responses` pre-stream failures stay as synthetic SSE only for Codex callers; non-Codex callers receive ordinary HTTP JSON errors instead
+- `GET /v1/models` follows the response shape selected by `originator`: Codex callers receive `{"models":[...]}` on success and the gateway's own structured error surface on failure, while other callers receive OpenAI-style `{"object":"list","data":[...]}` on success and OpenAI JSON error shape on failure
+- `/v1/responses` has endpoint-specific pre-stream failure rendering: Codex callers receive synthetic SSE, while non-Codex callers receive ordinary HTTP JSON errors
+- `/v1/responses/compact` always uses unary JSON response rendering for both success and failure; it does not use SSE error wrapping
+- public business endpoints collapse account-routing failures into a gateway-level unavailable shape with `code: "server_is_overloaded"`; they do not expose upstream `retry-after` or `resets_*`
+- for non-Codex HTTP responses, Codaze reshapes the surface toward the OpenAI API, but not as a byte-for-byte mirror; currently only `Content-Type` and `Cache-Control` are preserved downstream
 - on non-Codex `POST /v1/responses`, Codaze applies a small compatibility normalization set: it removes a few currently rejected fields, keeps only `service_tier: "priority"`, and rewrites legacy `web_search_preview*` aliases to `web_search`; see [docs/API.md](docs/API.md) for the exact rules
 
 For the full design rationale, see [docs/DESIGN.md](docs/DESIGN.md).

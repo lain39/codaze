@@ -33,6 +33,52 @@ async fn admin_import_rejects_blank_refresh_token() {
 }
 
 #[tokio::test]
+async fn admin_import_hides_internal_disk_error_details() {
+    let temp = tempdir().expect("tempdir");
+    let state = AppState::new(test_config(temp.path().to_path_buf())).expect("state builds");
+    let first = state
+        .import_account(
+            "rt_123".to_string(),
+            Some("first".to_string()),
+            Some("first@example.com".to_string()),
+        )
+        .await
+        .expect("first import succeeds");
+    let account_id = first.account.id;
+
+    let blocking_parent = temp.path().join("not-a-dir");
+    std::fs::write(&blocking_parent, "file").expect("write blocking parent");
+    {
+        let mut accounts = state.accounts.write().await;
+        let record = accounts
+            .test_record_mut(&account_id)
+            .expect("record exists");
+        record.file_path = blocking_parent.join("account.json");
+    }
+
+    let response = super::super::admin::post_admin_accounts_import(
+        State(state.clone()),
+        Json(super::super::ImportAccountRequest {
+            refresh_token: "rt_123".to_string(),
+            label: Some("updated".to_string()),
+            email: Some("updated@example.com".to_string()),
+        }),
+    )
+    .await;
+
+    let (status, _headers, body) = response_parts(response).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(
+        json.pointer("/error/message").and_then(Value::as_str),
+        Some("internal server error")
+    );
+    let text = String::from_utf8(body.to_vec()).expect("utf8");
+    assert!(!text.contains("not-a-dir"));
+    assert!(!text.contains("account.json"));
+}
+
+#[tokio::test]
 async fn admin_account_wake_clears_block_state() {
     let (state, account_id) = seeded_state().await;
     {

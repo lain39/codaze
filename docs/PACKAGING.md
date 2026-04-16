@@ -88,7 +88,7 @@ If you want to pass CLI flags to `codaze`, add them as separate entries under `P
   <string>--accounts-dir</string>
   <string>/Users/you/.codaze</string>
   <string>--codex-version</string>
-  <string>0.120.0</string>
+  <string>0.121.0</string>
 </array>
 ```
 

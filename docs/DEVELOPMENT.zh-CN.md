@@ -44,7 +44,7 @@ cargo build --release
 cargo run --release -- \
   --listen 127.0.0.1:18039 \
   --admin-listen 127.0.0.1:18040 \
-  --codex-version 0.120.0 \
+  --codex-version 0.121.0 \
   --routing-policy least_in_flight \
   --fingerprint-mode normalize
 ```
@@ -220,7 +220,9 @@ cargo build
 需要特别注意的行为：
 
 - `normalize` 模式下，请求归一化还会把缺失或为 `null` 的 `instructions` 统一补成 `""`
-- pre-stream failure 不直接把原始 HTTP 错误裸透给 Codex；只有 Codex 调用方会收到 synthetic SSE，其他调用方拿到的是普通 HTTP JSON 错误
+- 路由级失败整形按接口和 response shape 选择：`/v1/models`、`/v1/responses/compact` 始终走 unary JSON，`/v1/responses` 则有自己的建流前失败规则
+- 在 `/v1/responses` 上，Codex 调用方会在建流前收到 synthetic SSE，其他调用方拿到的是普通 HTTP JSON 错误
+- 公开业务接口现在会把账号路由相关失败统一收口成网关级不可用；只有“请求本身非法”这类 caller error 还保留相对直接的下游语义
 - `previous_response_not_found` 会按现有约定转换成可触发下游 reset 的失败路径
 - `passthrough` 只是不做出站指纹整形，不影响本地路由和账号管理
 

@@ -1,12 +1,16 @@
 use super::GatewayAuth;
 use super::client::build_codex_user_agent;
-use super::fingerprint::{X_CODEX_INSTALLATION_ID_HEADER, apply_compact_installation_id_header};
+use super::fingerprint::{
+    X_CODEX_INSTALLATION_ID_HEADER, X_CODEX_TURN_METADATA_HEADER,
+    apply_compact_installation_id_header, default_turn_metadata_value,
+    merge_turn_metadata_thread_source,
+};
 use crate::config::FingerprintMode;
 use codex_login::default_client::default_headers;
 use codex_protocol::protocol::{SessionSource, SubAgentSource};
 use http::header::{
-    AUTHORIZATION, CONNECTION, CONTENT_LENGTH, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE,
-    TRAILER, TRANSFER_ENCODING, UPGRADE,
+    AUTHORIZATION, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, PROXY_AUTHENTICATE,
+    PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
 };
 use http::{HeaderMap, HeaderName, HeaderValue};
 
@@ -38,19 +42,9 @@ pub(super) fn build_responses_extra_headers(
 ) -> HeaderMap {
     let mut headers = HeaderMap::new();
     extend_fingerprint_headers(incoming, &mut headers, mode);
-    copy_if_present(incoming, &mut headers, "session_id");
-    copy_if_present(incoming, &mut headers, "x-client-request-id");
-    copy_if_present(incoming, &mut headers, "x-codex-beta-features");
-    copy_if_present(incoming, &mut headers, "x-codex-turn-state");
-    copy_if_present(incoming, &mut headers, "x-codex-turn-metadata");
+    extend_responses_context_headers(incoming, &mut headers);
     extend_responses_identity_headers(incoming, &mut headers, mode);
-    copy_if_present(
-        incoming,
-        &mut headers,
-        "x-responsesapi-include-timing-metrics",
-    );
-    copy_if_present(incoming, &mut headers, "traceparent");
-    copy_if_present(incoming, &mut headers, "tracestate");
+    maybe_normalize_turn_metadata_header(&mut headers, mode);
     if mode == FingerprintMode::Normalize && !headers.contains_key("x-client-request-id") {
         maybe_copy_session_id_to_client_request_id(incoming, &mut headers);
     }
@@ -67,10 +61,16 @@ pub(super) fn build_unary_extra_headers(
         "responses/compact" => {
             let mut headers = HeaderMap::new();
             extend_fingerprint_headers(incoming, &mut headers, mode);
-            maybe_extend_conversation_headers(incoming, &mut headers);
+            extend_responses_context_headers(incoming, &mut headers);
             extend_responses_identity_headers(incoming, &mut headers, mode);
-            copy_if_present(incoming, &mut headers, X_CODEX_INSTALLATION_ID_HEADER);
+            maybe_normalize_turn_metadata_header(&mut headers, mode);
+            if mode == FingerprintMode::Passthrough {
+                copy_if_present(incoming, &mut headers, X_CODEX_INSTALLATION_ID_HEADER);
+            }
             apply_compact_installation_id_header(&mut headers, installation_id, mode);
+            if mode == FingerprintMode::Normalize && !headers.contains_key("x-client-request-id") {
+                maybe_copy_session_id_to_client_request_id(incoming, &mut headers);
+            }
             headers
         }
         "memories/trace_summarize" => {
@@ -95,18 +95,24 @@ pub(super) fn build_responses_websocket_headers(
     mode: FingerprintMode,
     codex_version: &str,
 ) -> HeaderMap {
-    let mut headers = default_headers();
-    insert_header(
-        &mut headers,
-        "user-agent",
-        &build_codex_user_agent(codex_version),
-    );
+    let mut headers = if mode == FingerprintMode::Passthrough {
+        HeaderMap::new()
+    } else {
+        let mut headers = default_headers();
+        insert_header(
+            &mut headers,
+            "user-agent",
+            &build_codex_user_agent(codex_version),
+        );
+        headers
+    };
     copy_if_present(incoming, &mut headers, "session_id");
     copy_if_present(incoming, &mut headers, "x-client-request-id");
     copy_if_present(incoming, &mut headers, "x-codex-beta-features");
     copy_if_present(incoming, &mut headers, "x-codex-turn-state");
-    copy_if_present(incoming, &mut headers, "x-codex-turn-metadata");
+    copy_if_present(incoming, &mut headers, X_CODEX_TURN_METADATA_HEADER);
     extend_responses_identity_headers(incoming, &mut headers, mode);
+    maybe_normalize_turn_metadata_header(&mut headers, mode);
     copy_if_present(
         incoming,
         &mut headers,
@@ -155,6 +161,37 @@ fn extend_responses_identity_headers(
     copy_if_present(source, dest, X_OPENAI_SUBAGENT_HEADER);
     maybe_insert_parent_thread_id_from_session_source(source, dest, mode);
     maybe_insert_subagent_from_session_source(source, dest, mode);
+}
+
+fn extend_responses_context_headers(source: &HeaderMap, dest: &mut HeaderMap) {
+    copy_if_present(source, dest, "session_id");
+    copy_if_present(source, dest, "x-client-request-id");
+    copy_if_present(source, dest, "x-codex-beta-features");
+    copy_if_present(source, dest, "x-codex-turn-state");
+    copy_if_present(source, dest, X_CODEX_TURN_METADATA_HEADER);
+    copy_if_present(source, dest, "x-responsesapi-include-timing-metrics");
+    copy_if_present(source, dest, "traceparent");
+    copy_if_present(source, dest, "tracestate");
+}
+
+fn maybe_normalize_turn_metadata_header(headers: &mut HeaderMap, mode: FingerprintMode) {
+    if mode != FingerprintMode::Normalize {
+        return;
+    }
+
+    let normalized = match headers
+        .get(X_CODEX_TURN_METADATA_HEADER)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(raw) => merge_turn_metadata_thread_source(raw),
+        None => Some(default_turn_metadata_value()),
+    };
+
+    let Some(normalized) = normalized else {
+        return;
+    };
+
+    insert_header(headers, X_CODEX_TURN_METADATA_HEADER, &normalized);
 }
 
 fn maybe_insert_parent_thread_id_from_session_source(
@@ -227,23 +264,6 @@ fn parent_thread_id_header_value(source: &SessionSource) -> Option<String> {
     Some(parent_thread_id.to_string())
 }
 
-fn maybe_extend_conversation_headers(incoming: &HeaderMap, headers: &mut HeaderMap) {
-    if let Some(session_id) = incoming
-        .get("session_id")
-        .and_then(|value| value.to_str().ok())
-    {
-        headers.extend(build_conversation_headers(Some(session_id.to_string())));
-    }
-}
-
-fn build_conversation_headers(conversation_id: Option<String>) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    if let Some(id) = conversation_id {
-        insert_header(&mut headers, "session_id", &id);
-    }
-    headers
-}
-
 fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
     if let (Ok(header_name), Ok(header_value)) =
         (name.parse::<HeaderName>(), HeaderValue::from_str(value))
@@ -253,16 +273,17 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
 }
 
 fn copy_if_present(source: &HeaderMap, dest: &mut HeaderMap, name: &str) {
-    if let Some(value) = source.get(name)
-        && let Ok(header_name) = HeaderName::from_bytes(name.as_bytes())
-    {
-        dest.insert(header_name, value.clone());
+    if let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) {
+        for value in source.get_all(&header_name) {
+            dest.append(header_name.clone(), value.clone());
+        }
     }
 }
 
 pub(crate) fn sanitize_response_headers(headers: &HeaderMap) -> HeaderMap {
     let mut cloned = headers.clone();
     remove_hop_by_hop_response_headers(&mut cloned);
+    cloned.remove(CONTENT_ENCODING);
     cloned.remove(CONTENT_LENGTH);
     normalize_rate_limit_headers(&mut cloned);
     cloned

@@ -272,18 +272,24 @@ It is intentional design, not an accidental patch.
 
 ## 12. Why `/models` Is Kept Simple
 
-The project does not turn `/models` into a synthetic account-pool-derived result, and it does not layer extra state on top.
+The project does not turn `/models` into a synthetic account-pool-derived result, and it does not do complex local aggregation.
 
 Current rule:
 
-- `/models` follows the same upstream path as other endpoints
-- no special caching or local aggregation just to look clever
+- `/models` still fetches its ground-truth snapshot from the normal upstream path
+- it keeps a local cache of the most recent successful upstream models snapshot
+- Codex callers always go straight to upstream and refresh the current snapshot
+- for non-Codex callers:
+  - if the cache is still within TTL, return the fresh snapshot directly
+  - if only a stale snapshot exists, return the current snapshot first and trigger a background refresh
+  - if no snapshot exists yet, fetch synchronously from upstream
+- it does not try to invent cross-account aggregation or new model-visibility semantics just to look clever
 
 Reasons:
 
-- request frequency is usually low
-- upstream already knows which models are visible
-- over-localizing this path creates more drift points
+- other endpoints need a stable models snapshot to derive default `parallel_tool_calls`
+- upstream already knows which models are visible, so the gateway should not rebuild that policy locally
+- a light cache reduces `/models` churn without turning the project into a heavier state machine
 
 ## 13. Local-First Security Boundary
 

@@ -3,13 +3,14 @@ use crate::classifier::FailureClass;
 use crate::config::FingerprintMode;
 use crate::responses::{
     PendingWebsocketRequest, PendingWebsocketRetryResult, WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE,
-    WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE, WebsocketProxyOutcome,
-    classify_websocket_error_text, classify_websocket_upstream_message,
-    is_responses_websocket_request_start, normalize_rate_limit_event_payload,
-    normalize_response_create_installation_id_payload, retry_pending_websocket_request,
-    rewrite_previous_response_not_found_message, rewrite_previous_response_not_found_payload,
-    should_passthrough_retryable_websocket_reset, upstream_message_commits_request,
-    upstream_message_is_terminal,
+    WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE, WebsocketProxyOutcome, classify_openai_error_event,
+    classify_response_failed_event, classify_websocket_error_text,
+    classify_websocket_upstream_message, is_responses_websocket_request_start,
+    normalize_rate_limit_event_payload, normalize_response_create_installation_id_payload,
+    normalize_response_create_payload, normalize_websocket_rate_limit_message,
+    retry_pending_websocket_request, rewrite_previous_response_not_found_message,
+    rewrite_previous_response_not_found_payload, should_passthrough_retryable_websocket_reset,
+    upstream_message_commits_request, upstream_message_is_terminal,
 };
 use axum::http::HeaderMap;
 use serde_json::Value;
@@ -65,6 +66,49 @@ fn websocket_error_text_prefers_resets_in_seconds_for_usage_limit_error() {
     assert_eq!(retry_after, Some(Duration::from_secs(77)));
     assert!(details.contains("error.type=usage_limit_reached"));
     assert!(details.contains("error.resets_in_seconds=77"));
+}
+
+#[test]
+fn websocket_error_text_accepts_status_code_alias() {
+    let outcome = classify_websocket_error_text(
+        r#"{"type":"error","status_code":429,"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","resets_in_seconds":77}}"#,
+    )
+    .expect("classified");
+
+    let WebsocketProxyOutcome::Failed {
+        failure,
+        retry_after,
+        details,
+    } = outcome
+    else {
+        panic!("expected failed outcome");
+    };
+    assert_eq!(failure, FailureClass::QuotaExhausted);
+    assert_eq!(retry_after, Some(Duration::from_secs(77)));
+    assert!(details.contains("status=429"));
+    assert!(details.contains("error.type=usage_limit_reached"));
+}
+
+#[test]
+fn websocket_error_text_infers_status_when_wrapped_error_omits_it() {
+    let outcome = classify_websocket_error_text(
+        r#"{"type":"error","error":{"type":"authentication_error","code":"invalid_api_key","message":"bad key"}}"#,
+    )
+    .expect("classified");
+
+    let WebsocketProxyOutcome::Failed {
+        failure,
+        retry_after,
+        details,
+    } = outcome
+    else {
+        panic!("expected failed outcome");
+    };
+    assert_eq!(failure, FailureClass::AccessTokenRejected);
+    assert_eq!(retry_after, None);
+    assert!(!details.contains("status=502"));
+    assert!(details.contains("error.type=authentication_error"));
+    assert!(details.contains("error.code=invalid_api_key"));
 }
 
 #[test]
@@ -193,6 +237,51 @@ fn websocket_error_text_classifies_response_failed_payload() {
 }
 
 #[test]
+fn classify_openai_error_event_infers_unauthorized_from_authentication_error_type() {
+    let payload: Value = serde_json::from_str(
+        r#"{"type":"authentication_error","code":"invalid_api_key","message":"bad key"}"#,
+    )
+    .expect("json");
+
+    let classified = classify_openai_error_event(&payload);
+
+    assert_eq!(classified.status, axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(classified.failure, FailureClass::AccessTokenRejected);
+    assert_eq!(classified.retry_after, None);
+    assert_eq!(classified.details, "bad key");
+}
+
+#[test]
+fn classify_openai_error_event_infers_unauthorized_from_wrapped_authentication_error() {
+    let payload: Value = serde_json::from_str(
+        r#"{"type":"error","status":401,"error":{"type":"authentication_error","code":"invalid_api_key","message":"bad key"}}"#,
+    )
+    .expect("json");
+
+    let classified = classify_openai_error_event(&payload);
+
+    assert_eq!(classified.status, axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(classified.failure, FailureClass::AccessTokenRejected);
+    assert_eq!(classified.retry_after, None);
+    assert_eq!(classified.details, "bad key");
+}
+
+#[test]
+fn classify_response_failed_event_infers_forbidden_from_permission_error_type() {
+    let payload: Value = serde_json::from_str(
+        r#"{"type":"permission_error","code":"forbidden","message":"forbidden"}"#,
+    )
+    .expect("json");
+
+    let classified = classify_response_failed_event(&payload);
+
+    assert_eq!(classified.status, axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(classified.failure, FailureClass::TemporaryFailure);
+    assert_eq!(classified.retry_after, None);
+    assert_eq!(classified.details, "forbidden");
+}
+
+#[test]
 fn websocket_close_none_releases() {
     let outcome = classify_websocket_upstream_message(&TungsteniteMessage::Close(None));
     assert_eq!(outcome, Some(WebsocketProxyOutcome::Released));
@@ -245,6 +334,46 @@ fn websocket_abnormal_close_without_reason_is_temporary_failure() {
             failure: FailureClass::TemporaryFailure,
             retry_after: None,
             details: "responses websocket upstream closed with error: code=1006 reason="
+                .to_string(),
+        })
+    );
+}
+
+#[test]
+fn websocket_restart_close_without_reason_is_temporary_failure() {
+    let outcome = classify_websocket_upstream_message(&TungsteniteMessage::Close(Some(
+        TungsteniteCloseFrame {
+            code: CloseCode::Restart,
+            reason: "".into(),
+        },
+    )));
+
+    assert_eq!(
+        outcome,
+        Some(WebsocketProxyOutcome::Failed {
+            failure: FailureClass::TemporaryFailure,
+            retry_after: None,
+            details: "responses websocket upstream closed with error: code=1012 reason="
+                .to_string(),
+        })
+    );
+}
+
+#[test]
+fn websocket_again_close_without_reason_is_temporary_failure() {
+    let outcome = classify_websocket_upstream_message(&TungsteniteMessage::Close(Some(
+        TungsteniteCloseFrame {
+            code: CloseCode::Again,
+            reason: "".into(),
+        },
+    )));
+
+    assert_eq!(
+        outcome,
+        Some(WebsocketProxyOutcome::Failed {
+            failure: FailureClass::TemporaryFailure,
+            retry_after: None,
+            details: "responses websocket upstream closed with error: code=1013 reason="
                 .to_string(),
         })
     );
@@ -333,6 +462,122 @@ fn normalize_response_create_installation_id_payload_is_connection_scoped_on_rep
             .and_then(Value::as_str),
         Some("value")
     );
+    assert_eq!(
+        first_json.get("instructions").and_then(Value::as_str),
+        Some("")
+    );
+    assert_eq!(
+        second_json.get("instructions").and_then(Value::as_str),
+        Some("")
+    );
+}
+
+#[test]
+fn normalize_response_create_payload_adds_http_style_defaults_for_codex() {
+    let normalized = normalize_response_create_payload(
+        r#"{"type":"response.create","model":"gpt-5.4","instructions":null}"#,
+        FingerprintMode::Normalize,
+        true,
+        None,
+        Some("11111111-1111-5111-8111-111111111111"),
+    )
+    .expect("normalized payload");
+    let json: Value = serde_json::from_str(&normalized).expect("json");
+
+    assert_eq!(json.get("instructions").and_then(Value::as_str), Some(""));
+    assert_eq!(json.get("store").and_then(Value::as_bool), Some(false));
+    assert!(json.get("parallel_tool_calls").is_some());
+    assert_eq!(
+        json.pointer("/client_metadata/x-codex-installation-id")
+            .and_then(Value::as_str),
+        Some("11111111-1111-5111-8111-111111111111")
+    );
+    assert_eq!(
+        json.pointer("/client_metadata/x-codex-turn-metadata")
+            .and_then(Value::as_str)
+            .and_then(|value| serde_json::from_str::<Value>(value).ok())
+            .and_then(|metadata| {
+                metadata
+                    .get("thread_source")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .as_deref(),
+        Some("user")
+    );
+}
+
+#[test]
+fn normalize_response_create_payload_applies_non_codex_compatibility() {
+    let normalized = normalize_response_create_payload(
+        r#"{"type":"response.create","model":"gpt-5.4","input":"hello","temperature":0.7,"tool_choice":"web_search_preview","instructions":null}"#,
+        FingerprintMode::Normalize,
+        false,
+        None,
+        Some("11111111-1111-5111-8111-111111111111"),
+    )
+    .expect("normalized payload");
+    let json: Value = serde_json::from_str(&normalized).expect("json");
+
+    assert_eq!(json.get("temperature"), None);
+    assert_eq!(json.get("instructions").and_then(Value::as_str), Some(""));
+    assert_eq!(
+        json.pointer("/tool_choice/type").and_then(Value::as_str),
+        Some("web_search")
+    );
+    assert_eq!(
+        json.pointer("/input/0/type").and_then(Value::as_str),
+        Some("message")
+    );
+    assert_eq!(
+        json.pointer("/input/0/content/0/text")
+            .and_then(Value::as_str),
+        Some("hello")
+    );
+}
+
+#[test]
+fn normalize_response_create_payload_preserves_existing_thread_source_override() {
+    let normalized = normalize_response_create_payload(
+        r#"{"type":"response.create","model":"gpt-5.4","client_metadata":{"x-codex-turn-metadata":"{\"thread_source\":\"subagent\",\"k\":\"v\"}"}}"#,
+        FingerprintMode::Normalize,
+        true,
+        None,
+        None,
+    )
+    .expect("normalized payload");
+    let json: Value = serde_json::from_str(&normalized).expect("json");
+    let metadata = json
+        .pointer("/client_metadata/x-codex-turn-metadata")
+        .and_then(Value::as_str)
+        .and_then(|value| serde_json::from_str::<Value>(value).ok())
+        .expect("turn metadata");
+
+    assert_eq!(
+        metadata.get("thread_source").and_then(Value::as_str),
+        Some("subagent")
+    );
+    assert_eq!(metadata.get("k").and_then(Value::as_str), Some("v"));
+}
+
+#[test]
+fn normalize_response_create_payload_passthrough_still_applies_non_codex_body_compatibility() {
+    let normalized = normalize_response_create_payload(
+        r#"{"type":"response.create","model":"gpt-5.4","input":"hello","temperature":0.7}"#,
+        FingerprintMode::Passthrough,
+        false,
+        None,
+        None,
+    )
+    .expect("normalized payload");
+    let json: Value = serde_json::from_str(&normalized).expect("json");
+
+    assert_eq!(json.get("temperature"), None);
+    assert_eq!(
+        json.pointer("/input/0/type").and_then(Value::as_str),
+        Some("message")
+    );
+    assert!(json.get("instructions").is_none());
 }
 
 #[test]
@@ -497,5 +742,33 @@ fn normalize_rate_limit_event_payload_rewrites_used_percent_to_zero() {
         json.pointer("/rate_limits/primary/window_minutes")
             .and_then(Value::as_i64),
         Some(15)
+    );
+}
+
+#[test]
+fn normalize_websocket_rate_limit_message_drops_private_frame_for_non_codex() {
+    let message = TungsteniteMessage::Text(
+        r#"{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":95.0}}}"#.into(),
+    );
+
+    assert!(normalize_websocket_rate_limit_message(message, false).is_none());
+}
+
+#[test]
+fn normalize_websocket_rate_limit_message_preserves_private_frame_for_codex() {
+    let message = TungsteniteMessage::Text(
+        r#"{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":95.0}}}"#.into(),
+    );
+
+    let Some(TungsteniteMessage::Text(text)) =
+        normalize_websocket_rate_limit_message(message, true)
+    else {
+        panic!("expected normalized text message");
+    };
+    let json: Value = serde_json::from_str(text.as_ref()).expect("json");
+    assert_eq!(
+        json.pointer("/rate_limits/primary/used_percent")
+            .and_then(Value::as_f64),
+        Some(0.0)
     );
 }

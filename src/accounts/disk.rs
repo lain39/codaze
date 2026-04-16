@@ -341,9 +341,7 @@ fn scan_accounts_dir(accounts_dir: &Path) -> anyhow::Result<DiskScanSnapshot> {
     let mut entries = Vec::new();
     let mut failed_file_ids = HashSet::new();
     let mut observed_paths = HashSet::new();
-    for entry in fs::read_dir(accounts_dir)
-        .with_context(|| format!("read accounts dir `{}`", accounts_dir.display()))?
-    {
+    for entry in fs::read_dir(accounts_dir).context("read accounts dir")? {
         let entry = entry?;
         let path = entry.path();
         if !path.is_file()
@@ -360,7 +358,7 @@ fn scan_accounts_dir(accounts_dir: &Path) -> anyhow::Result<DiskScanSnapshot> {
             Ok(bytes) => bytes,
             Err(error) => {
                 failed_file_ids.insert(id.clone());
-                warn!(path = %path.display(), %error, "failed to read account file");
+                warn!(account_id = %id, %error, "failed to read account file");
                 continue;
             }
         };
@@ -368,7 +366,7 @@ fn scan_accounts_dir(accounts_dir: &Path) -> anyhow::Result<DiskScanSnapshot> {
             Ok(disk) => disk,
             Err(error) => {
                 failed_file_ids.insert(id.clone());
-                warn!(path = %path.display(), %error, "failed to parse account file");
+                warn!(account_id = %id, %error, "failed to parse account file");
                 continue;
             }
         };
@@ -376,11 +374,7 @@ fn scan_accounts_dir(accounts_dir: &Path) -> anyhow::Result<DiskScanSnapshot> {
             Ok(refresh_token) => refresh_token,
             Err(error) => {
                 failed_file_ids.insert(id.clone());
-                warn!(
-                    path = %path.display(),
-                    %error,
-                    "skipping invalid account file"
-                );
+                warn!(account_id = %id, %error, "skipping invalid account file");
                 continue;
             }
         };
@@ -442,7 +436,7 @@ fn build_disk_sync_plan(
 
         if group.len() > 1 {
             warn!(
-                canonical = %canonical.path.display(),
+                canonical_id = %canonical.id,
                 duplicate_count = group.len() - 1,
                 "merged duplicate refresh token account files"
             );
@@ -475,12 +469,7 @@ fn execute_disk_sync_fs(plan: &DiskSyncPlan) -> anyhow::Result<()> {
         if !path.exists() {
             continue;
         }
-        fs::remove_file(path).with_context(|| {
-            format!(
-                "remove duplicate refresh token account file `{}`",
-                path.display()
-            )
-        })?;
+        fs::remove_file(path).context("remove duplicate refresh token account file")?;
     }
 
     Ok(())
@@ -493,8 +482,7 @@ pub(crate) fn execute_account_disk_op(op: &AccountDiskOp) -> anyhow::Result<()> 
             if !path.exists() {
                 return Ok(());
             }
-            fs::remove_file(path)
-                .with_context(|| format!("remove account file `{}`", path.display()))?;
+            fs::remove_file(path).context("remove account file")?;
             Ok(())
         }
         AccountDiskOp::MoveToTrash {
@@ -506,19 +494,9 @@ pub(crate) fn execute_account_disk_op(op: &AccountDiskOp) -> anyhow::Result<()> 
                 return Ok(());
             }
             let target = unique_trash_path(accounts_dir, source);
-            fs::rename(source, &target).with_context(|| {
-                format!(
-                    "move invalid account file `{}` to `{}`",
-                    source.display(),
-                    target.display()
-                )
-            })?;
-            set_private_file_permissions(&target).with_context(|| {
-                format!(
-                    "tighten trashed account file permissions `{}`",
-                    target.display()
-                )
-            })?;
+            fs::rename(source, &target).context("move invalid account file to trash")?;
+            set_private_file_permissions(&target)
+                .context("tighten trashed account file permissions")?;
             Ok(())
         }
     }
@@ -554,21 +532,13 @@ impl AccountStore {
 pub(crate) fn write_account_file(path: &Path, disk: &AccountFile) -> anyhow::Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| anyhow!("account file `{}` has no parent directory", path.display()))?;
-    ensure_private_dir(parent)
-        .with_context(|| format!("create account parent dir `{}`", parent.display()))?;
+        .ok_or_else(|| anyhow!("account file has no parent directory"))?;
+    ensure_private_dir(parent).context("create account parent dir")?;
 
     let bytes = serde_json::to_vec_pretty(disk).context("serialize account file")?;
     let temp_path = temp_account_path(path);
-    write_private_file(&temp_path, &bytes)
-        .with_context(|| format!("write temp account file `{}`", temp_path.display()))?;
-    replace_account_file(&temp_path, path).with_context(|| {
-        format!(
-            "atomically replace account file `{}` with `{}`",
-            path.display(),
-            temp_path.display()
-        )
-    })?;
+    write_private_file(&temp_path, &bytes).context("write temp account file")?;
+    replace_account_file(&temp_path, path).context("atomically replace account file")?;
     Ok(())
 }
 
@@ -610,14 +580,8 @@ fn encode_wide_null(path: &Path) -> Vec<u16> {
 }
 
 pub(super) fn ensure_accounts_directories(accounts_dir: &Path) -> anyhow::Result<()> {
-    ensure_private_dir(accounts_dir)
-        .with_context(|| format!("create accounts dir `{}`", accounts_dir.display()))?;
-    ensure_private_dir(&accounts_dir.join(TRASH_DIR_NAME)).with_context(|| {
-        format!(
-            "create accounts trash dir `{}`",
-            accounts_dir.join(TRASH_DIR_NAME).display()
-        )
-    })?;
+    ensure_private_dir(accounts_dir).context("create accounts dir")?;
+    ensure_private_dir(&accounts_dir.join(TRASH_DIR_NAME)).context("create accounts trash dir")?;
     Ok(())
 }
 

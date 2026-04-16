@@ -1,6 +1,7 @@
-use super::client::build_codex_user_agent;
+use super::client::{build_codex_user_agent, retry_policy};
 use super::fingerprint::{
-    X_CODEX_INSTALLATION_ID_HEADER, apply_responses_installation_id, stable_installation_id,
+    X_CODEX_INSTALLATION_ID_HEADER, X_CODEX_TURN_METADATA_HEADER, apply_responses_installation_id,
+    stable_installation_id,
 };
 use super::headers::{
     OPENAI_BETA_HEADER, RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE, SESSION_SOURCE_HEADER,
@@ -9,10 +10,17 @@ use super::headers::{
 };
 use super::http::{
     append_client_version_query, apply_http_request_timeout, configure_responses_stream_request,
+    execute_with_semantic_retry, should_retry_request_error,
 };
 use super::*;
+use crate::accounts::UpstreamAccount;
+use crate::classifier::FailureClass;
 use ::http::header::{ACCEPT, HeaderValue};
+use axum::{Router, extract::State, routing::get};
 use serde_json::Value;
+use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 
 #[test]
 fn appends_client_version_query() {
@@ -25,24 +33,24 @@ fn appends_client_version_query() {
         timeout: None,
     };
 
-    append_client_version_query(&mut req, "0.120.0");
+    append_client_version_query(&mut req, "0.121.0");
 
     assert_eq!(
         req.url,
-        "https://chatgpt.com/backend-api/codex/models?client_version=0.120.0"
+        "https://chatgpt.com/backend-api/codex/models?client_version=0.121.0"
     );
 }
 
 #[test]
 fn user_agent_uses_configured_codex_version() {
-    let user_agent = build_codex_user_agent("0.120.0");
+    let user_agent = build_codex_user_agent("0.121.0");
     let prefix = format!(
-        "{}/0.120.0 ",
+        "{}/0.121.0 ",
         codex_login::default_client::originator().value
     );
 
     assert!(user_agent.starts_with(&prefix));
-    assert!(user_agent.ends_with(" (codex-tui; 0.120.0)"));
+    assert!(user_agent.ends_with(" (codex-tui; 0.121.0)"));
 }
 
 #[test]
@@ -50,7 +58,7 @@ fn models_headers_forward_incoming_fingerprint_in_passthrough_mode() {
     let mut incoming = HeaderMap::new();
     incoming.insert(
         "user-agent",
-        HeaderValue::from_static("codex_cli_rs/0.120.0"),
+        HeaderValue::from_static("codex_cli_rs/0.121.0"),
     );
     incoming.insert("originator", HeaderValue::from_static("codex_cli_rs"));
 
@@ -60,7 +68,7 @@ fn models_headers_forward_incoming_fingerprint_in_passthrough_mode() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some("codex_cli_rs/0.120.0")
+        Some("codex_cli_rs/0.121.0")
     );
     assert_eq!(
         headers
@@ -75,7 +83,7 @@ fn responses_headers_forward_incoming_fingerprint_in_passthrough_mode() {
     let mut incoming = HeaderMap::new();
     incoming.insert(
         "user-agent",
-        HeaderValue::from_static("codex_cli_rs/0.120.0"),
+        HeaderValue::from_static("codex_cli_rs/0.121.0"),
     );
     incoming.insert("originator", HeaderValue::from_static("codex_cli_rs"));
     incoming.insert("session_id", HeaderValue::from_static("abc"));
@@ -86,7 +94,7 @@ fn responses_headers_forward_incoming_fingerprint_in_passthrough_mode() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some("codex_cli_rs/0.120.0")
+        Some("codex_cli_rs/0.121.0")
     );
     assert_eq!(
         headers
@@ -100,6 +108,22 @@ fn responses_headers_forward_incoming_fingerprint_in_passthrough_mode() {
             .and_then(|value| value.to_str().ok()),
         Some("abc")
     );
+}
+
+#[test]
+fn responses_headers_preserve_all_tracestate_values() {
+    let mut incoming = HeaderMap::new();
+    incoming.append("tracestate", HeaderValue::from_static("foo=1"));
+    incoming.append("tracestate", HeaderValue::from_static("bar=2"));
+
+    let headers = build_responses_extra_headers(&incoming, FingerprintMode::Passthrough);
+    let values = headers
+        .get_all("tracestate")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+
+    assert_eq!(values, vec!["foo=1", "bar=2"]);
 }
 
 #[test]
@@ -154,6 +178,47 @@ fn responses_headers_normalize_missing_client_request_id_from_session_id() {
         Some("abc")
     );
     assert!(headers.get("user-agent").is_none());
+}
+
+#[test]
+fn responses_headers_normalize_injects_user_thread_source_into_turn_metadata() {
+    let headers = build_responses_extra_headers(&HeaderMap::new(), FingerprintMode::Normalize);
+    let metadata: Value = serde_json::from_str(
+        headers
+            .get(X_CODEX_TURN_METADATA_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .expect("turn metadata header"),
+    )
+    .expect("json");
+
+    assert_eq!(
+        metadata.get("thread_source").and_then(Value::as_str),
+        Some("user")
+    );
+}
+
+#[test]
+fn responses_headers_normalize_preserves_existing_thread_source() {
+    let mut incoming = HeaderMap::new();
+    incoming.insert(
+        X_CODEX_TURN_METADATA_HEADER,
+        HeaderValue::from_static(r#"{"thread_source":"subagent","k":"v"}"#),
+    );
+
+    let headers = build_responses_extra_headers(&incoming, FingerprintMode::Normalize);
+    let metadata: Value = serde_json::from_str(
+        headers
+            .get(X_CODEX_TURN_METADATA_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .expect("turn metadata header"),
+    )
+    .expect("json");
+
+    assert_eq!(
+        metadata.get("thread_source").and_then(Value::as_str),
+        Some("subagent")
+    );
+    assert_eq!(metadata.get("k").and_then(Value::as_str), Some("v"));
 }
 
 #[test]
@@ -277,6 +342,81 @@ fn compact_headers_forward_responses_identity_headers() {
 }
 
 #[test]
+fn compact_headers_forward_responses_context_headers() {
+    let mut incoming = HeaderMap::new();
+    incoming.insert("session_id", HeaderValue::from_static("thread-123"));
+    incoming.insert("x-client-request-id", HeaderValue::from_static("req-123"));
+    incoming.insert("x-codex-turn-state", HeaderValue::from_static("turn-123"));
+    incoming.insert(
+        "x-codex-turn-metadata",
+        HeaderValue::from_static("{\"k\":\"v\"}"),
+    );
+    incoming.insert(
+        "x-responsesapi-include-timing-metrics",
+        HeaderValue::from_static("true"),
+    );
+    incoming.insert("traceparent", HeaderValue::from_static("00-abc-123-01"));
+    incoming.append("tracestate", HeaderValue::from_static("foo=1"));
+    incoming.append("tracestate", HeaderValue::from_static("bar=2"));
+
+    let headers = build_unary_extra_headers(
+        "responses/compact",
+        &incoming,
+        FingerprintMode::Normalize,
+        None,
+    );
+
+    assert_eq!(
+        headers
+            .get("session_id")
+            .and_then(|value| value.to_str().ok()),
+        Some("thread-123")
+    );
+    assert_eq!(
+        headers
+            .get("x-client-request-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("req-123")
+    );
+    assert_eq!(
+        headers
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok()),
+        Some("turn-123")
+    );
+    let turn_metadata: Value = serde_json::from_str(
+        headers
+            .get("x-codex-turn-metadata")
+            .and_then(|value| value.to_str().ok())
+            .expect("turn metadata header"),
+    )
+    .expect("json");
+    assert_eq!(turn_metadata.get("k").and_then(Value::as_str), Some("v"));
+    assert_eq!(
+        turn_metadata.get("thread_source").and_then(Value::as_str),
+        Some("user")
+    );
+    assert_eq!(
+        headers
+            .get("x-responsesapi-include-timing-metrics")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
+    );
+    assert_eq!(
+        headers
+            .get("traceparent")
+            .and_then(|value| value.to_str().ok()),
+        Some("00-abc-123-01")
+    );
+    let tracestate_values = headers
+        .get_all("tracestate")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert_eq!(tracestate_values, vec!["foo=1", "bar=2"]);
+}
+
+#[test]
 fn stable_installation_id_is_uuid_v5_and_deterministic() {
     let first = stable_installation_id("acct_123");
     let second = stable_installation_id("acct_123");
@@ -339,6 +479,24 @@ fn compact_headers_normalize_overrides_installation_id() {
 }
 
 #[test]
+fn compact_headers_normalize_drops_downstream_installation_id_when_account_id_is_missing() {
+    let mut incoming = HeaderMap::new();
+    incoming.insert(
+        X_CODEX_INSTALLATION_ID_HEADER,
+        HeaderValue::from_static("00000000-0000-5000-8000-000000000000"),
+    );
+
+    let headers = build_unary_extra_headers(
+        "responses/compact",
+        &incoming,
+        FingerprintMode::Normalize,
+        None,
+    );
+
+    assert!(headers.get(X_CODEX_INSTALLATION_ID_HEADER).is_none());
+}
+
+#[test]
 fn compact_headers_passthrough_preserves_existing_installation_id_without_synthesizing() {
     let mut incoming = HeaderMap::new();
     incoming.insert(
@@ -394,7 +552,7 @@ fn responses_stream_request_matches_codex_transport_expectations() {
 #[test]
 fn websocket_headers_include_beta_marker() {
     let headers =
-        build_responses_websocket_headers(&HeaderMap::new(), FingerprintMode::Normalize, "0.120.0");
+        build_responses_websocket_headers(&HeaderMap::new(), FingerprintMode::Normalize, "0.121.0");
 
     assert_eq!(
         headers
@@ -406,8 +564,38 @@ fn websocket_headers_include_beta_marker() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some(build_codex_user_agent("0.120.0").as_str())
+        Some(build_codex_user_agent("0.121.0").as_str())
     );
+    let metadata: Value = serde_json::from_str(
+        headers
+            .get(X_CODEX_TURN_METADATA_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .expect("turn metadata header"),
+    )
+    .expect("json");
+    assert_eq!(
+        metadata.get("thread_source").and_then(Value::as_str),
+        Some("user")
+    );
+}
+
+#[test]
+fn websocket_headers_passthrough_does_not_synthesize_default_fingerprint() {
+    let headers = build_responses_websocket_headers(
+        &HeaderMap::new(),
+        FingerprintMode::Passthrough,
+        "0.121.0",
+    );
+
+    assert_eq!(
+        headers
+            .get(OPENAI_BETA_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE)
+    );
+    assert!(headers.get("user-agent").is_none());
+    assert!(headers.get("originator").is_none());
+    assert!(headers.get("x-openai-internal-codex-residency").is_none());
 }
 
 #[test]
@@ -424,7 +612,7 @@ fn websocket_headers_forward_responses_identity_headers() {
     incoming.insert("x-openai-subagent", HeaderValue::from_static("review"));
 
     let headers =
-        build_responses_websocket_headers(&incoming, FingerprintMode::Normalize, "0.120.0");
+        build_responses_websocket_headers(&incoming, FingerprintMode::Normalize, "0.121.0");
 
     assert_eq!(
         headers
@@ -444,6 +632,179 @@ fn websocket_headers_forward_responses_identity_headers() {
             .and_then(|value| value.to_str().ok()),
         Some("review")
     );
+}
+
+#[tokio::test]
+async fn semantic_retry_preserves_last_timeout_instead_of_retry_limit() {
+    let policy = retry_policy(&RetryConfig {
+        max_attempts: 2,
+        base_delay: Duration::from_millis(1),
+        retry_429: false,
+        retry_5xx: true,
+        retry_transport: true,
+    });
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let attempts_seen = attempts.clone();
+
+    let result: Result<(), TransportError> = execute_with_semantic_retry(
+        policy,
+        || Request {
+            method: Method::GET,
+            url: "https://example.com".to_string(),
+            headers: HeaderMap::new(),
+            body: None,
+            compression: RequestCompression::None,
+            timeout: None,
+        },
+        move |_req, _| {
+            let attempts_seen = attempts_seen.clone();
+            async move {
+                attempts_seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(TransportError::Timeout)
+            }
+        },
+    )
+    .await;
+
+    assert!(matches!(result, Err(TransportError::Timeout)));
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
+}
+
+#[test]
+fn semantic_retry_does_not_retry_structured_request_rejection_on_5xx() {
+    let policy = retry_policy(&RetryConfig {
+        max_attempts: 2,
+        base_delay: Duration::from_millis(1),
+        retry_429: false,
+        retry_5xx: true,
+        retry_transport: true,
+    });
+    let error = TransportError::Http {
+        status: StatusCode::BAD_GATEWAY,
+        url: None,
+        headers: None,
+        body: Some(r#"{"error":{"code":"invalid_prompt","message":"bad prompt"}}"#.to_string()),
+    };
+
+    assert!(!should_retry_request_error(&policy, &error, 0));
+    assert_eq!(
+        crate::classifier::classify_request_error(&error),
+        FailureClass::RequestRejected
+    );
+}
+
+#[tokio::test]
+async fn semantic_retry_execution_does_not_retry_structured_request_rejection_on_5xx() {
+    let policy = retry_policy(&RetryConfig {
+        max_attempts: 2,
+        base_delay: Duration::from_millis(1),
+        retry_429: false,
+        retry_5xx: true,
+        retry_transport: true,
+    });
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let attempts_seen = attempts.clone();
+
+    let result: Result<(), TransportError> = execute_with_semantic_retry(
+        policy,
+        || Request {
+            method: Method::GET,
+            url: "https://example.com".to_string(),
+            headers: HeaderMap::new(),
+            body: None,
+            compression: RequestCompression::None,
+            timeout: None,
+        },
+        move |_req, _| {
+            let attempts_seen = attempts_seen.clone();
+            async move {
+                attempts_seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(TransportError::Http {
+                    status: StatusCode::BAD_GATEWAY,
+                    url: None,
+                    headers: None,
+                    body: Some(
+                        r#"{"error":{"code":"invalid_prompt","message":"bad prompt"}}"#.to_string(),
+                    ),
+                })
+            }
+        },
+    )
+    .await;
+
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let Err(TransportError::Http { status, body, .. }) = result else {
+        panic!("expected http error");
+    };
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        body.as_deref(),
+        Some(r#"{"error":{"code":"invalid_prompt","message":"bad prompt"}}"#)
+    );
+}
+
+#[tokio::test]
+async fn passthrough_http_requests_do_not_inject_default_fingerprint_headers() {
+    let seen_headers = Arc::new(Mutex::new(None));
+    let app = Router::new()
+        .route(
+            "/models",
+            get({
+                let seen_headers = seen_headers.clone();
+                move |headers: HeaderMap, State(()): State<()>| {
+                    let seen_headers = seen_headers.clone();
+                    async move {
+                        *seen_headers.lock().await = Some(headers);
+                        "ok"
+                    }
+                }
+            }),
+        )
+        .with_state(());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve upstream test app");
+    });
+
+    let client = UpstreamClient::new(
+        format!("http://{addr}"),
+        "0.121.0".to_string(),
+        FingerprintMode::Passthrough,
+        5,
+    )
+    .expect("client builds");
+    let account = UpstreamAccount {
+        access_token: "at_123".to_string(),
+        chatgpt_account_id: Some("acct_123".to_string()),
+    };
+
+    let response = client
+        .get_models(&account, &HeaderMap::new())
+        .await
+        .expect("models response");
+
+    assert_eq!(response.status, StatusCode::OK);
+    let headers = seen_headers
+        .lock()
+        .await
+        .clone()
+        .expect("captured upstream headers");
+    assert!(headers.get("originator").is_none());
+    assert!(headers.get("user-agent").is_none());
+    assert!(headers.get("x-openai-internal-codex-residency").is_none());
+    assert_eq!(
+        headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer at_123")
+    );
+
+    server.abort();
 }
 
 #[test]
@@ -489,6 +850,7 @@ fn sanitize_response_headers_removes_hop_by_hop_headers() {
     let mut headers = HeaderMap::new();
     headers.insert("connection", HeaderValue::from_static("keep-alive"));
     headers.insert("keep-alive", HeaderValue::from_static("timeout=5"));
+    headers.insert("content-encoding", HeaderValue::from_static("zstd"));
     headers.insert("transfer-encoding", HeaderValue::from_static("chunked"));
     headers.insert("upgrade", HeaderValue::from_static("websocket"));
     headers.insert("te", HeaderValue::from_static("trailers"));
@@ -507,6 +869,7 @@ fn sanitize_response_headers_removes_hop_by_hop_headers() {
 
     assert!(sanitized.get("connection").is_none());
     assert!(sanitized.get("keep-alive").is_none());
+    assert!(sanitized.get("content-encoding").is_none());
     assert!(sanitized.get("transfer-encoding").is_none());
     assert!(sanitized.get("upgrade").is_none());
     assert!(sanitized.get("te").is_none());
@@ -559,23 +922,31 @@ fn apply_http_request_timeout_sets_timeout() {
 }
 
 #[test]
-fn upstream_client_uses_request_timeout_for_refresh_and_unary_http_requests() {
+fn upstream_client_uses_request_timeout_for_refresh_unary_and_websocket_connect_requests() {
     let client = UpstreamClient::new(
         "https://chatgpt.com/backend-api/codex".to_string(),
-        "0.120.0".to_string(),
+        "0.121.0".to_string(),
         FingerprintMode::Normalize,
         321,
     )
     .expect("client builds");
 
     assert_eq!(client.unary_request_timeout, Some(Duration::from_secs(321)));
+    assert_eq!(
+        client.stream_connect_timeout,
+        Some(Duration::from_secs(321))
+    );
+    assert_eq!(
+        client.websocket_connect_timeout,
+        Some(Duration::from_secs(321))
+    );
 }
 
 #[test]
 fn upstream_client_does_not_set_total_timeout_for_stream_requests() {
     let client = UpstreamClient::new(
         "https://chatgpt.com/backend-api/codex".to_string(),
-        "0.120.0".to_string(),
+        "0.121.0".to_string(),
         FingerprintMode::Normalize,
         321,
     )

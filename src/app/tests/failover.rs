@@ -5,6 +5,8 @@ use crate::failover::{
     FailoverFailure, SuccessDisposition, apply_refresh_failure, execute_unary_json_with_failover,
     execute_with_failover, execute_with_failover_after_selection, resolve_selection_failure,
 };
+use crate::gateway_errors::{FailureRenderMode, render_failover_failure};
+use crate::models::ResponseShape;
 use crate::upstream::RefreshFailure;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::{
@@ -245,13 +247,13 @@ async fn responses_when_pool_is_blocked_returns_synthetic_quota_event() {
             headers.insert("originator", HeaderValue::from_static("codex-tui"));
             headers
         },
-        Json(json!({
+        Ok(Json(json!({
             "model": "gpt-5.4",
             "input": [{
                 "role": "user",
                 "content": [{"type": "input_text", "text": "hi"}]
             }]
-        })),
+        }))),
     )
     .await;
 
@@ -523,6 +525,59 @@ fn resolve_selection_failure_excludes_current_failed_account_from_pool_summary()
     }
 }
 
+#[test]
+fn resolve_selection_failure_internal_without_pool_summary_returns_internal_json() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut accounts = AccountStore::new(temp.path().to_path_buf());
+
+    let failure = resolve_selection_failure(
+        &mut accounts,
+        SelectionFailure::Internal(anyhow::anyhow!("selected account disappeared")),
+        &HashSet::new(),
+        None,
+        None,
+    );
+
+    match failure {
+        FailoverFailure::Internal { status, detail } => {
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(detail, "selected account disappeared");
+        }
+        other => panic!("unexpected failure: {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_selection_failure_internal_ignores_pool_summary_and_retryable_response() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut accounts = AccountStore::new(temp.path().to_path_buf());
+
+    let failure = resolve_selection_failure(
+        &mut accounts,
+        SelectionFailure::Internal(anyhow::anyhow!("selected account disappeared")),
+        &HashSet::new(),
+        Some(PoolBlockSummary {
+            blocked_reason: crate::accounts::BlockedReason::QuotaExhausted,
+            blocked_until: None,
+            retry_after: Some(Duration::from_secs(77)),
+        }),
+        Some(FailoverFailure::Refresh(RefreshFailure {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: "rate limited".to_string(),
+            class: FailureClass::RateLimited,
+            retry_after: Some(Duration::from_secs(11)),
+        })),
+    );
+
+    match failure {
+        FailoverFailure::Internal { status, detail } => {
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(detail, "selected account disappeared");
+        }
+        other => panic!("unexpected failure: {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn failover_failure_into_response_keeps_compact_http_error_shape() {
     let response = FailoverFailure::Transport(codex_client::TransportError::Http {
@@ -541,19 +596,105 @@ async fn failover_failure_into_response_keeps_compact_http_error_shape() {
     .into_response();
 
     let (status, headers, body) = response_parts(response).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(
-        headers
-            .get("x-codex-primary-used-percent")
-            .and_then(|value| value.to_str().ok()),
-        Some("0.0")
-    );
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(headers.get("x-codex-primary-used-percent").is_none());
     assert_eq!(
         serde_json::from_slice::<Value>(&body)
             .expect("json")
             .pointer("/error/message")
             .and_then(Value::as_str),
-        Some("forbidden")
+        Some("No account available right now. Try again later.")
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)
+            .expect("json")
+            .pointer("/error/code")
+            .and_then(Value::as_str),
+        Some("server_is_overloaded")
+    );
+}
+
+#[tokio::test]
+async fn failover_failure_into_openai_response_uses_openai_error_shape() {
+    let failure = FailoverFailure::Transport(codex_client::TransportError::Http {
+        status: StatusCode::FORBIDDEN,
+        url: None,
+        headers: Some({
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("text/plain"));
+            headers.insert(
+                "x-codex-primary-used-percent",
+                HeaderValue::from_static("95.0"),
+            );
+            headers
+        }),
+        body: Some("forbidden".to_string()),
+    });
+    let response = render_failover_failure(
+        &failure,
+        ResponseShape::OpenAi,
+        FailureRenderMode::UnaryJson,
+    );
+
+    let (status, headers, body) = response_parts(response).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    assert!(headers.get("x-codex-primary-used-percent").is_none());
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(
+        json.pointer("/error/message").and_then(Value::as_str),
+        Some("No account available right now. Try again later.")
+    );
+    assert_eq!(
+        json.pointer("/error/type").and_then(Value::as_str),
+        Some("server_error")
+    );
+    assert_eq!(
+        json.pointer("/error/code").and_then(Value::as_str),
+        Some("server_is_overloaded")
+    );
+}
+
+#[tokio::test]
+async fn failover_failure_into_openai_response_wraps_non_envelope_json_error() {
+    let failure = FailoverFailure::Transport(codex_client::TransportError::Http {
+        status: StatusCode::BAD_REQUEST,
+        url: None,
+        headers: Some({
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers
+        }),
+        body: Some(r#"{"detail":"upstream failed"}"#.to_string()),
+    });
+    let response = render_failover_failure(
+        &failure,
+        ResponseShape::OpenAi,
+        FailureRenderMode::UnaryJson,
+    );
+
+    let (status, headers, body) = response_parts(response).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert!(json.get("detail").is_none());
+    assert_eq!(
+        json.pointer("/error/message").and_then(Value::as_str),
+        Some("upstream failed")
+    );
+    assert_eq!(
+        json.pointer("/error/type").and_then(Value::as_str),
+        Some("invalid_request_error")
     );
 }
 
@@ -577,7 +718,7 @@ async fn transport_http_failure_response_sanitizes_hop_by_hop_headers() {
     .into_response();
 
     let (status, headers, body) = response_parts(response).await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(headers.get("connection").is_none());
     assert!(headers.get("keep-alive").is_none());
     assert!(headers.get("transfer-encoding").is_none());
@@ -595,7 +736,14 @@ async fn transport_http_failure_response_sanitizes_hop_by_hop_headers() {
             .expect("json")
             .pointer("/error/message")
             .and_then(Value::as_str),
-        Some("upstream failed")
+        Some("No account available right now. Try again later.")
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)
+            .expect("json")
+            .pointer("/error/code")
+            .and_then(Value::as_str),
+        Some("server_is_overloaded")
     );
 }
 
@@ -674,12 +822,116 @@ async fn execute_unary_json_with_failover_all_bad_json_returns_bad_gateway() {
     .expect_err("all accounts return malformed json");
 
     match failure {
-        FailoverFailure::Json { status, message } => {
+        FailoverFailure::Internal { status, detail } => {
             assert_eq!(status, StatusCode::BAD_GATEWAY);
-            assert_eq!(message, "decode upstream json body");
+            assert_eq!(detail, "decode upstream json body");
         }
         other => panic!("unexpected failure: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn execute_unary_json_with_failover_preserves_later_non_decode_failure() {
+    let (state, [_first_account_id, second_account_id]) = seeded_state_pair().await;
+    let second_access_token = {
+        let accounts = state.accounts.read().await;
+        accounts
+            .upstream_account(&second_account_id)
+            .expect("second upstream account")
+            .access_token
+    };
+
+    let failure = execute_unary_json_with_failover(&state, move |upstream_account| {
+        let second_access_token = second_access_token.clone();
+        async move {
+            if upstream_account.access_token == second_access_token {
+                return Err::<crate::upstream::UpstreamUnaryResponse, _>(
+                    codex_client::TransportError::Http {
+                        status: StatusCode::BAD_REQUEST,
+                        url: None,
+                        headers: None,
+                        body: Some("{\"error\":{\"message\":\"bad request\"}}".to_string()),
+                    },
+                );
+            }
+
+            Ok::<_, codex_client::TransportError>(crate::upstream::UpstreamUnaryResponse {
+                status: StatusCode::OK,
+                headers: HeaderMap::new(),
+                body: Bytes::from_static(b"not-json"),
+            })
+        }
+    })
+    .await
+    .expect_err("second account should surface real request failure");
+
+    match failure {
+        FailoverFailure::Transport(codex_client::TransportError::Http { status, body, .. }) => {
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(
+                body.as_deref(),
+                Some("{\"error\":{\"message\":\"bad request\"}}")
+            );
+        }
+        other => panic!("unexpected failure: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn failover_internal_response_hides_internal_detail_for_openai() {
+    let response = render_failover_failure(
+        &FailoverFailure::Internal {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            detail: "disk write failed at /private/tmp/account.json".to_string(),
+        },
+        ResponseShape::OpenAi,
+        FailureRenderMode::UnaryJson,
+    );
+
+    let (status, headers, body) = response_parts(response).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(
+        json.pointer("/error/message").and_then(Value::as_str),
+        Some("Internal Server Error")
+    );
+    assert_eq!(
+        json.pointer("/error/code").and_then(Value::as_str),
+        Some("internal_server_error")
+    );
+    assert!(!String::from_utf8_lossy(&body).contains("/private/tmp/account.json"));
+}
+
+#[tokio::test]
+async fn failover_internal_pre_stream_response_hides_internal_detail_for_codex() {
+    let response = render_failover_failure(
+        &FailoverFailure::Internal {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            detail: "disk write failed at /private/tmp/account.json".to_string(),
+        },
+        ResponseShape::Codex,
+        FailureRenderMode::ResponsesPreStream,
+    );
+
+    let (status, headers, body) = response_parts(response).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    let text = String::from_utf8(body.to_vec()).expect("utf8");
+    assert!(text.contains("event: response.failed"));
+    assert!(text.contains("\"code\":\"internal_server_error\""));
+    assert!(text.contains("\"message\":\"Internal Server Error\""));
+    assert!(!text.contains("/private/tmp/account.json"));
 }
 
 #[tokio::test]

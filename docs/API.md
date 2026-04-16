@@ -19,6 +19,11 @@ The admin port is for local control only.
 
 ## Public Endpoints
 
+General notes:
+
+- when `originator` is not Codex, Codaze reshapes public HTTP responses toward OpenAI API surface semantics, but this is not a byte-for-byte mirror of the official OpenAI API
+- on that non-Codex HTTP path, only `Content-Type` and `Cache-Control` are currently preserved downstream
+
 ### `GET /health`
 
 Purpose:
@@ -97,10 +102,13 @@ Example response for Codex callers:
 }
 ```
 
+This only shows the minimal skeleton; the real response is the full Codex models snapshot, and each model object contains substantially more fields.
+
 Notes:
 
 - Codex shape is selected when `originator` identifies a Codex caller
 - all other callers receive OpenAI-compatible `object/data` shape
+- Codex callers use the gateway's own structured error surface on failure; non-Codex callers use the ordinary OpenAI JSON error shape
 - the gateway keeps a lazy cache of the upstream Codex models snapshot and derives `parallel_tool_calls` defaults from that cache
 
 ### `POST /v1/responses`
@@ -108,8 +116,8 @@ Notes:
 Purpose:
 
 - main business endpoint
-- returns `text/event-stream`
-- exposes Codex-shaped Responses SSE over HTTP
+- returns `text/event-stream` for streamed requests
+- keeps Codex-shaped Responses SSE for Codex callers, while reshaping the non-Codex surface toward OpenAI API semantics
 
 Example request:
 
@@ -137,6 +145,7 @@ Request notes:
   - `instructions: ""` when missing or `null`
   - model-derived `parallel_tool_calls`
 - the request body may contain a private `_gateway` object; it is consumed locally and stripped before forwarding
+- for non-Codex callers, a top-level string `input` is accepted and normalized into a single user message containing one `input_text` item
 - for non-Codex callers, you should explicitly send `"stream": true`; on the current upstream path, omitting it commonly returns `400 {"detail":"Stream must be set to true"}`
 
 #### Non-Codex compatibility normalization
@@ -203,7 +212,7 @@ Pre-stream failure example for Codex callers:
 
 ```text
 event: response.failed
-data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_123","object":"response","created_at":1770000000,"status":"failed","background":false,"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5.4. Please try again in 11.5s."}}}
+data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_123","object":"response","created_at":1770000000,"status":"failed","background":false,"error":{"code":"server_is_overloaded","message":"No account available right now. Try again later."}}}
 ```
 
 Pre-stream failure example for non-Codex callers:
@@ -211,17 +220,28 @@ Pre-stream failure example for non-Codex callers:
 ```json
 {
   "error": {
-    "message": "Rate limit reached for gpt-5.4. Please try again in 11s.",
-    "code": "rate_limit_exceeded"
+    "message": "No account available right now. Try again later.",
+    "type": "server_error",
+    "param": null,
+    "code": "server_is_overloaded"
   }
 }
 ```
 
+Post-stream synthetic gateway error example for non-Codex callers:
+
+```text
+event: error
+data: {"type":"error","code":"server_is_overloaded","message":"No account available right now. Try again later.","sequence_number":3}
+```
+
 Notes:
 
-- pre-stream failures on `/v1/responses` are wrapped into synthetic SSE only for Codex callers
-- non-Codex callers receive ordinary HTTP JSON errors instead
-- this split exists so Codex can keep using its existing Responses error-handling path without forcing all other callers into Codex-specific SSE failure handling
+- `/v1/responses` has endpoint-specific pre-stream failure rendering based on response shape
+- Codex callers receive synthetic SSE so they can stay on the existing Responses streaming error path
+- non-Codex callers receive ordinary HTTP JSON errors and do not need to handle Codex-specific SSE failures
+- for non-Codex callers, once the stream is established, any downstream failure synthesized or rewritten by the gateway is emitted as OpenAI-style `event: error` rather than `event: response.failed`
+- account-routing failures are collapsed into gateway-level unavailability; public responses do not expose upstream `retry-after`, `resets_at`, or `resets_in_seconds`
 
 ### `GET /v1/responses` websocket
 
@@ -327,21 +347,14 @@ Successful response example:
 ```json
 {
   "id": "resp_123",
-  "object": "response",
+  "object": "response.compaction",
   "created_at": 1770000000,
   "status": "completed",
   "model": "gpt-5.4",
   "output": [
     {
-      "id": "msg_123",
-      "type": "message",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "output_text",
-          "text": "OK"
-        }
-      ]
+      "type": "compaction",
+      "encrypted_content": "base64-or-ciphertext-placeholder"
     }
   ]
 }
@@ -350,6 +363,10 @@ Successful response example:
 Notes:
 
 - this is normal JSON, not SSE
+- both success and failure stay in unary JSON; there is no synthetic SSE failure path here
+- for non-Codex callers, a top-level string `input` is accepted and normalized into a single user message containing one `input_text` item
+- for non-Codex callers, output items with `type: "compaction_summary"` are rewritten to `type: "compaction"` before the response is returned downstream
+- for non-Codex callers, HTTP responses on this path also preserve only `Content-Type` and `Cache-Control`
 - unlike `/v1/responses`, the implementation does not invent `store` here
 - `parallel_tool_calls` is only injected in `normalize` mode using model rules
 
@@ -772,17 +789,17 @@ Notes:
 
 ### Upstream refresh failure
 
-If the failure happens during refresh, and not in the `/v1/responses` pre-stream SSE-wrapping path, the upstream JSON error is usually forwarded to the caller directly.
+Refresh failures that surface through public business endpoints are normally collapsed into the same gateway-level unavailable shape used for other account-routing failures, rather than forwarding raw upstream refresh JSON.
 
 Example:
 
 ```json
 {
   "error": {
-    "message": "Could not validate your refresh token. Please try signing in again.",
-    "type": "invalid_request_error",
+    "message": "No account available right now. Try again later.",
+    "type": "server_error",
     "param": null,
-    "code": "refresh_token_expired"
+    "code": "server_is_overloaded"
   }
 }
 ```

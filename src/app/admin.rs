@@ -7,6 +7,16 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
+use tracing::warn;
+
+const ADMIN_INTERNAL_ERROR_MESSAGE: &str = "internal server error";
+
+fn admin_internal_error_response() -> Response {
+    json_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        ADMIN_INTERNAL_ERROR_MESSAGE.to_string(),
+    )
+}
 
 pub(crate) async fn post_admin_accounts_import(
     State(state): State<AppState>,
@@ -40,7 +50,10 @@ pub(crate) async fn post_admin_accounts_import(
             )
                 .into_response()
         }
-        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Err(error) => {
+            warn!(%error, "admin account import failed");
+            admin_internal_error_response()
+        }
     }
 }
 
@@ -57,7 +70,10 @@ pub(crate) async fn delete_admin_account(
     match state.remove_account(&id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => json_error(StatusCode::NOT_FOUND, format!("unknown account `{id}`")),
-        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Err(error) => {
+            warn!(account_id = %id, %error, "admin account delete failed");
+            admin_internal_error_response()
+        }
     }
 }
 
@@ -71,7 +87,10 @@ pub(crate) async fn post_admin_account_wake(
     }
     match accounts.wake_account(&id) {
         Ok(result) => (StatusCode::OK, Json(json!(result))).into_response(),
-        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Err(error) => {
+            warn!(account_id = %id, %error, "admin account wake failed");
+            admin_internal_error_response()
+        }
     }
 }
 

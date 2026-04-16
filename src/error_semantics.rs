@@ -54,7 +54,7 @@ pub(crate) fn analyze_request_http(
         explicit_resets_in_seconds: None,
         explicit_retry_after: None,
         unauthorized_failure: FailureClass::AccessTokenRejected,
-        allow_message_retry_after: false,
+        allow_message_retry_after: true,
     })
 }
 
@@ -75,7 +75,7 @@ pub(crate) fn analyze_refresh_http(
         explicit_resets_in_seconds: None,
         explicit_retry_after: None,
         unauthorized_failure: FailureClass::AuthInvalid,
-        allow_message_retry_after: false,
+        allow_message_retry_after: true,
     });
     if semantics.failure == FailureClass::RequestRejected
         && body.is_some_and(refresh_body_indicates_invalid_token)
@@ -123,6 +123,7 @@ pub(crate) fn analyze_error(context: AnalyzeErrorContext<'_>) -> UpstreamErrorSe
                 payload
                     .message
                     .as_deref()
+                    .or(context.body)
                     .and_then(parse_retry_after_message)
             } else {
                 None
@@ -251,6 +252,9 @@ fn classify_http_from_status_and_text(status: StatusCode, body: Option<&str>) ->
     {
         return FailureClass::QuotaExhausted;
     }
+    if status == StatusCode::FORBIDDEN {
+        return FailureClass::TemporaryFailure;
+    }
     if status.is_server_error() {
         return FailureClass::TemporaryFailure;
     }
@@ -277,15 +281,16 @@ fn parse_retry_after_message(message: &str) -> Option<Duration> {
     }
     let unit = chars.collect::<String>().trim_start().to_string();
     let seconds = value.parse::<f64>().ok()?;
-    let multiplier = if unit.starts_with("ms") {
-        0.001
-    } else if unit.starts_with('m') {
-        60.0
-    } else if unit.starts_with('h') {
-        3600.0
-    } else {
-        1.0
-    };
+    let multiplier =
+        if unit.starts_with("millisecond") || unit.starts_with("msec") || unit.starts_with("ms") {
+            0.001
+        } else if unit.starts_with('m') {
+            60.0
+        } else if unit.starts_with('h') {
+            3600.0
+        } else {
+            1.0
+        };
     Duration::try_from_secs_f64(seconds * multiplier).ok()
 }
 
@@ -374,5 +379,41 @@ mod tests {
 
         assert_eq!(semantics.failure, FailureClass::RateLimited);
         assert_eq!(semantics.retry_after, Some(Duration::from_secs(8)));
+    }
+
+    #[test]
+    fn request_analysis_uses_message_retry_after_when_header_and_body_resets_are_missing() {
+        let semantics = analyze_request_http(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            Some(
+                r#"{"error":{"message":"Rate limit reached for gpt-5.4. Please try again in 8s.","code":"rate_limit_exceeded"}}"#,
+            ),
+        );
+
+        assert_eq!(semantics.failure, FailureClass::RateLimited);
+        assert_eq!(semantics.retry_after, Some(Duration::from_secs(8)));
+    }
+
+    #[test]
+    fn request_analysis_plain_forbidden_is_temporary_failure() {
+        let semantics = analyze_request_http(StatusCode::FORBIDDEN, None, Some("forbidden"));
+
+        assert_eq!(semantics.failure, FailureClass::TemporaryFailure);
+        assert_eq!(semantics.retry_after, None);
+    }
+
+    #[test]
+    fn request_analysis_message_retry_after_supports_milliseconds() {
+        let semantics = analyze_request_http(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            Some(
+                r#"{"error":{"message":"Rate limit reached for gpt-5.4. Please try again in 500 milliseconds.","code":"rate_limit_exceeded"}}"#,
+            ),
+        );
+
+        assert_eq!(semantics.failure, FailureClass::RateLimited);
+        assert_eq!(semantics.retry_after, Some(Duration::from_millis(500)));
     }
 }

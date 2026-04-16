@@ -1,11 +1,19 @@
 use crate::classifier::{FailureClass, classify_request_http};
-use crate::error_semantics::{
-    parse_resets_retry_after_payload, parse_retry_after_header, parse_structured_error_body,
-};
+use crate::error_semantics::{analyze_request_http, parse_structured_error_body};
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 use std::time::Duration;
+
+pub(crate) const GATEWAY_UNAVAILABLE_CODE: &str = "server_is_overloaded";
+pub(crate) const GATEWAY_UNAVAILABLE_MESSAGE: &str =
+    "No account available right now. Try again later.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DownstreamFailureKind {
+    CallerError,
+    GatewayUnavailable,
+}
 
 #[derive(Default)]
 pub(crate) struct SyntheticResponseFailedPayload {
@@ -28,7 +36,7 @@ pub(crate) fn extract_http_retry_after(
     headers: Option<&HeaderMap>,
     body: Option<&str>,
 ) -> Option<Duration> {
-    parse_retry_after_header(headers).or_else(|| extract_http_body_retry_after(body))
+    analyze_request_http(StatusCode::BAD_GATEWAY, headers, body).retry_after
 }
 
 pub(crate) fn render_synthetic_response_failed_event(
@@ -36,11 +44,98 @@ pub(crate) fn render_synthetic_response_failed_event(
     last_sequence_number: Option<i64>,
     payload: SyntheticResponseFailedPayload,
 ) -> Option<Bytes> {
-    let payload = synthetic_response_failed_json(last_response_id, last_sequence_number, payload);
+    render_synthetic_response_failed_event_with_metadata(
+        last_response_id,
+        last_sequence_number.unwrap_or(-1) + 1,
+        payload,
+    )
+}
+
+pub(crate) fn render_synthetic_response_failed_event_with_metadata(
+    response_id: Option<&str>,
+    sequence_number: i64,
+    payload: SyntheticResponseFailedPayload,
+) -> Option<Bytes> {
+    let payload = synthetic_response_failed_json(response_id, sequence_number, payload);
     let encoded = serde_json::to_string(&payload).ok()?;
     Some(Bytes::from(format!(
         "event: response.failed\ndata: {encoded}\n\n"
     )))
+}
+
+pub(crate) fn render_openai_stream_error_event(
+    last_sequence_number: Option<i64>,
+    payload: SyntheticResponseFailedPayload,
+) -> Option<Bytes> {
+    render_openai_stream_error_event_with_sequence(
+        last_sequence_number.unwrap_or(-1).saturating_add(1).max(0),
+        payload,
+    )
+}
+
+pub(crate) fn render_openai_stream_error_event_with_sequence(
+    sequence_number: i64,
+    payload: SyntheticResponseFailedPayload,
+) -> Option<Bytes> {
+    let encoded = serde_json::to_string(&json!({
+        "type": "error",
+        "code": payload.code.unwrap_or_else(|| "internal_server_error".to_string()),
+        "message": payload
+            .message
+            .unwrap_or_else(|| "Upstream request failed.".to_string()),
+        "sequence_number": sequence_number,
+    }))
+    .ok()?;
+    Some(Bytes::from(format!("event: error\ndata: {encoded}\n\n")))
+}
+
+pub(crate) fn gateway_unavailable_payload() -> SyntheticResponseFailedPayload {
+    SyntheticResponseFailedPayload {
+        code: Some(GATEWAY_UNAVAILABLE_CODE.to_string()),
+        message: Some(GATEWAY_UNAVAILABLE_MESSAGE.to_string()),
+        error_type: None,
+        plan_type: None,
+        resets_at: None,
+        resets_in_seconds: None,
+    }
+}
+
+pub(crate) fn downstream_failure_kind(failure: FailureClass) -> DownstreamFailureKind {
+    match failure {
+        FailureClass::RequestRejected => DownstreamFailureKind::CallerError,
+        FailureClass::AccessTokenRejected
+        | FailureClass::AuthInvalid
+        | FailureClass::RateLimited
+        | FailureClass::QuotaExhausted
+        | FailureClass::RiskControlled
+        | FailureClass::TemporaryFailure
+        | FailureClass::InternalFailure => DownstreamFailureKind::GatewayUnavailable,
+    }
+}
+
+pub(crate) fn downstream_failure_kind_from_status(
+    status: StatusCode,
+    failure: FailureClass,
+) -> DownstreamFailureKind {
+    if status == StatusCode::FORBIDDEN {
+        return DownstreamFailureKind::GatewayUnavailable;
+    }
+    downstream_failure_kind(failure)
+}
+
+pub(crate) fn downstream_failure_kind_for_http(
+    status: StatusCode,
+    body: Option<&str>,
+) -> DownstreamFailureKind {
+    downstream_failure_kind_from_status(status, classify_request_http(status, body))
+}
+
+pub(crate) fn is_gateway_unavailable_status_failure(
+    status: StatusCode,
+    failure: FailureClass,
+) -> bool {
+    downstream_failure_kind_from_status(status, failure)
+        == DownstreamFailureKind::GatewayUnavailable
 }
 
 pub(crate) fn synthetic_response_failed_payload_from_transport(
@@ -104,19 +199,14 @@ pub(crate) fn fallback_error_code_for_http(status: StatusCode, body: Option<&str
     }
 }
 
-fn extract_http_body_retry_after(body: Option<&str>) -> Option<Duration> {
-    parse_resets_retry_after_payload(&parse_structured_error_body(body))
-}
-
 fn synthetic_response_failed_json(
-    last_response_id: Option<&str>,
-    last_sequence_number: Option<i64>,
+    response_id: Option<&str>,
+    sequence_number: i64,
     extracted: SyntheticResponseFailedPayload,
 ) -> Value {
-    let response_id = last_response_id
+    let response_id = response_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("resp_gateway_{}", chrono::Utc::now().timestamp_micros()));
-    let sequence_number = last_sequence_number.unwrap_or(-1) + 1;
     let message = extracted
         .message
         .unwrap_or_else(|| "Upstream request failed.".to_string());

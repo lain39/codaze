@@ -5,6 +5,7 @@ mod config;
 mod error_semantics;
 mod failover;
 mod gateway_errors;
+mod http_shape;
 mod models;
 mod request_normalization;
 mod responses;

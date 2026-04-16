@@ -5,6 +5,8 @@ use serde_json::{Map, Value, map::Entry};
 use uuid::Uuid;
 
 pub(crate) const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
+pub(crate) const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
+const USER_THREAD_SOURCE: &str = "user";
 
 // Stable namespace for deriving a Codex-like installation identifier from a ChatGPT account id.
 const INSTALLATION_ID_NAMESPACE: Uuid = Uuid::from_u128(0x6d0a_b975_7f88_4ef4_9466_3f90_47d5_064d);
@@ -85,4 +87,65 @@ pub(crate) fn apply_client_metadata_installation_id(
         Value::String(installation_id.to_string()),
     );
     true
+}
+
+pub(crate) fn default_turn_metadata_value() -> String {
+    Value::Object(Map::from_iter([(
+        "thread_source".to_string(),
+        Value::String(USER_THREAD_SOURCE.to_string()),
+    )]))
+    .to_string()
+}
+
+pub(crate) fn merge_turn_metadata_thread_source(raw: &str) -> Option<String> {
+    let mut json = serde_json::from_str::<Value>(raw).ok()?;
+    let object = json.as_object_mut()?;
+    object
+        .entry("thread_source".to_string())
+        .or_insert_with(|| Value::String(USER_THREAD_SOURCE.to_string()));
+    serde_json::to_string(&json).ok()
+}
+
+pub(crate) fn apply_client_metadata_user_thread_source(root: &mut Value) -> bool {
+    let Some(object) = root.as_object_mut() else {
+        return false;
+    };
+
+    let metadata = match object.entry("client_metadata".to_string()) {
+        Entry::Vacant(entry) => entry.insert(Value::Object(Map::new())),
+        Entry::Occupied(mut entry) => {
+            if entry.get().is_null() {
+                entry.insert(Value::Object(Map::new()));
+            } else if !entry.get().is_object() {
+                return false;
+            }
+            entry.into_mut()
+        }
+    };
+
+    let Some(metadata) = metadata.as_object_mut() else {
+        return false;
+    };
+
+    match metadata.entry(X_CODEX_TURN_METADATA_HEADER.to_string()) {
+        Entry::Vacant(entry) => {
+            entry.insert(Value::String(default_turn_metadata_value()));
+            true
+        }
+        Entry::Occupied(mut entry) => {
+            if entry.get().is_null() {
+                entry.insert(Value::String(default_turn_metadata_value()));
+                return true;
+            }
+
+            let Some(raw) = entry.get().as_str() else {
+                return false;
+            };
+            let Some(merged) = merge_turn_metadata_thread_source(raw) else {
+                return false;
+            };
+            entry.insert(Value::String(merged));
+            true
+        }
+    }
 }

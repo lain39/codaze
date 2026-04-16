@@ -4,9 +4,8 @@ use crate::accounts::{
 };
 use crate::app::AppState;
 use crate::classifier::{FailureClass, classify_request_error};
-use crate::gateway_errors::{
-    json_error, pool_blocked_response, refresh_failure_response, transport_error_response,
-};
+use crate::gateway_errors::{FailureRenderMode, render_failover_failure};
+use crate::models::ResponseShape;
 use crate::responses::extract_retry_after;
 use crate::upstream::{
     RefreshFailure, UpstreamUnaryResponse, UpstreamWebsocketConnection, body_as_json,
@@ -47,17 +46,13 @@ pub(crate) enum FailoverFailure {
     Refresh(RefreshFailure),
     Transport(codex_client::TransportError),
     PoolBlocked(PoolBlockSummary),
-    Json { status: StatusCode, message: String },
+    CallerJson { status: StatusCode, message: String },
+    Internal { status: StatusCode, detail: String },
 }
 
 impl FailoverFailure {
     pub(crate) fn into_response(self) -> Response {
-        match self {
-            Self::Refresh(error) => refresh_failure_response(&error),
-            Self::Transport(error) => transport_error_response(error),
-            Self::PoolBlocked(summary) => pool_blocked_response(summary),
-            Self::Json { status, message } => json_error(status, message),
-        }
+        render_failover_failure(&self, ResponseShape::Codex, FailureRenderMode::UnaryJson)
     }
 }
 
@@ -192,9 +187,9 @@ where
                                 .write()
                                 .await
                                 .release_selection(&selection.account_id);
-                            return Err(FailoverFailure::Json {
+                            return Err(FailoverFailure::Internal {
                                 status: StatusCode::INTERNAL_SERVER_ERROR,
-                                message: error.to_string(),
+                                detail: error.to_string(),
                             });
                         }
                     }
@@ -285,9 +280,9 @@ where
                                 retry_after,
                                 details,
                             ) {
-                                return Err(FailoverFailure::Json {
+                                return Err(FailoverFailure::Internal {
                                     status: StatusCode::INTERNAL_SERVER_ERROR,
-                                    message: apply_error.to_string(),
+                                    detail: apply_error.to_string(),
                                 });
                             }
                             tried_accounts.insert(selection.account_id);
@@ -308,9 +303,9 @@ where
                             retry_after,
                             details,
                         ) {
-                            return Err(FailoverFailure::Json {
+                            return Err(FailoverFailure::Internal {
                                 status: StatusCode::INTERNAL_SERVER_ERROR,
-                                message: apply_error.to_string(),
+                                detail: apply_error.to_string(),
                             });
                         }
                         return Err(response);
@@ -326,9 +321,9 @@ where
                     retry_after,
                     details,
                 ) {
-                    return Err(FailoverFailure::Json {
+                    return Err(FailoverFailure::Internal {
                         status: StatusCode::INTERNAL_SERVER_ERROR,
-                        message: apply_error.to_string(),
+                        detail: apply_error.to_string(),
                     });
                 }
                 if retryable {
@@ -368,11 +363,27 @@ where
 
 pub(crate) async fn execute_unary_json_with_failover<F, Fut>(
     state: &AppState,
-    mut execute: F,
+    execute: F,
 ) -> Result<Response, FailoverFailure>
 where
     F: FnMut(UpstreamAccount) -> Fut,
     Fut: Future<Output = Result<UpstreamUnaryResponse, codex_client::TransportError>>,
+{
+    execute_unary_json_with_failover_shaped(state, execute, |status, headers, json_body| {
+        (status, headers, Json(json_body)).into_response()
+    })
+    .await
+}
+
+pub(crate) async fn execute_unary_json_with_failover_shaped<F, Fut, S>(
+    state: &AppState,
+    mut execute: F,
+    mut shape_response: S,
+) -> Result<Response, FailoverFailure>
+where
+    F: FnMut(UpstreamAccount) -> Fut,
+    Fut: Future<Output = Result<UpstreamUnaryResponse, codex_client::TransportError>>,
+    S: FnMut(StatusCode, HeaderMap, serde_json::Value) -> Response,
 {
     let mut tried_accounts = HashSet::new();
     let mut decode_failed_accounts = HashSet::new();
@@ -389,13 +400,14 @@ where
         {
             Ok(upstream) => upstream,
             Err(error) => {
-                if !decode_failed_accounts.is_empty()
+                if matches!(error, FailoverFailure::PoolBlocked(_))
+                    && !decode_failed_accounts.is_empty()
                     && decode_failed_accounts == tried_accounts
                     && let Some(message) = last_decode_failure
                 {
-                    return Err(FailoverFailure::Json {
+                    return Err(FailoverFailure::Internal {
                         status: StatusCode::BAD_GATEWAY,
-                        message,
+                        detail: message,
                     });
                 }
                 return Err(error);
@@ -410,17 +422,16 @@ where
                     &upstream.account_id,
                     AccountSettlement::Success,
                 ) {
-                    return Err(FailoverFailure::Json {
+                    return Err(FailoverFailure::Internal {
                         status: StatusCode::INTERNAL_SERVER_ERROR,
-                        message: error.to_string(),
+                        detail: error.to_string(),
                     });
                 }
-                return Ok((
+                return Ok(shape_response(
                     upstream.value.status,
                     upstream.value.headers,
-                    Json(json_body),
-                )
-                    .into_response());
+                    json_body,
+                ));
             }
             Err(error) => {
                 let details = error.to_string();
@@ -435,9 +446,9 @@ where
                         details: details.clone(),
                     },
                 ) {
-                    return Err(FailoverFailure::Json {
+                    return Err(FailoverFailure::Internal {
                         status: StatusCode::INTERNAL_SERVER_ERROR,
-                        message: error.to_string(),
+                        detail: error.to_string(),
                     });
                 }
                 decode_failed_accounts.insert(account_id.clone());
@@ -465,9 +476,9 @@ pub(crate) async fn apply_refresh_failure(
         )
         .await
     {
-        return Err(FailoverFailure::Json {
+        return Err(FailoverFailure::Internal {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: apply_error.to_string(),
+            detail: apply_error.to_string(),
         });
     }
     Ok(())
@@ -540,30 +551,22 @@ pub(crate) fn resolve_selection_failure(
     error: SelectionFailure,
     excluded_accounts: &HashSet<String>,
     last_pool_summary_candidate: Option<PoolBlockSummary>,
-    last_retryable_response: Option<FailoverFailure>,
+    _last_retryable_response: Option<FailoverFailure>,
 ) -> FailoverFailure {
-    if let Some(summary) = accounts.summarize_selection_failure(excluded_accounts) {
-        return FailoverFailure::PoolBlocked(summary);
-    }
     match error {
+        SelectionFailure::Internal(error) => FailoverFailure::Internal {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            detail: error.to_string(),
+        },
         SelectionFailure::NoEligibleAccount => {
+            if let Some(summary) = accounts.summarize_selection_failure(excluded_accounts) {
+                return FailoverFailure::PoolBlocked(summary);
+            }
             FailoverFailure::PoolBlocked(last_pool_summary_candidate.unwrap_or(PoolBlockSummary {
                 blocked_reason: BlockedReason::TemporarilyUnavailable,
                 blocked_until: None,
                 retry_after: None,
             }))
-        }
-        SelectionFailure::Internal(error) => {
-            if let Some(summary) = last_pool_summary_candidate {
-                return FailoverFailure::PoolBlocked(summary);
-            }
-            if let Some(response) = last_retryable_response {
-                return response;
-            }
-            FailoverFailure::Json {
-                status: StatusCode::SERVICE_UNAVAILABLE,
-                message: error.to_string(),
-            }
         }
     }
 }

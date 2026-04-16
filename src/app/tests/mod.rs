@@ -2,6 +2,7 @@ mod admin;
 mod failover;
 mod normalization;
 mod responses;
+mod routes;
 mod websocket;
 
 use super::*;
@@ -28,7 +29,7 @@ fn test_config(accounts_dir: std::path::PathBuf) -> RuntimeConfig {
         routing_policy: RoutingPolicy::LeastInFlight,
         fingerprint_mode: FingerprintMode::Normalize,
         upstream_base_url: "https://chatgpt.com/backend-api/codex".to_string(),
-        codex_version: "0.120.0".to_string(),
+        codex_version: "0.121.0".to_string(),
         request_timeout_seconds: 600,
         refresh_skew_seconds: 8,
         accounts_scan_interval_seconds: 15,
